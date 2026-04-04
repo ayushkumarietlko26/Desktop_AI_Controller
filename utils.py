@@ -27,6 +27,11 @@ class JarvisAssistant:
     def __init__(self):
         self.recognizer = sr.Recognizer()
         self.is_listening = False
+        try:
+            with sr.Microphone() as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=1.0)
+        except Exception as e:
+            print(f"Error adjusting for ambient noise during initialization: {e}")
 
     def listen(self):
         if self.is_listening:
@@ -35,7 +40,6 @@ class JarvisAssistant:
         try:
             try: # Outer try-except for sr.Microphone() initialization
                 with sr.Microphone() as source:
-                    self.recognizer.adjust_for_ambient_noise(source, duration=1.0)
                     try:
                         print("Jarvis is listening...")
                         audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)

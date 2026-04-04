@@ -42,7 +42,7 @@ class VideoFeedWindowWorker(QThread):
         cap = cv2.VideoCapture(WEBCAM, cv2.CAP_DSHOW)
         cap.set(3, CAP_WIDTH)  # id 3 => capture window width
         cap.set(4, CAP_HEIGHT)  # id 4 => capture window height
-        detector = htm.HandDetector(max_num_hands=2, min_detection_confidence=0.8)
+        detector = htm.HandDetector(max_num_hands=1, min_detection_confidence=0.7)
 
         prev_time = 0  # set initial time for fps tracking
         prev_mic_toggle_time = 0
@@ -237,9 +237,24 @@ class VideoFeedWindowWorker(QThread):
         screen_w, screen_h = RESOLUTION_W, RESOLUTION_H
 
         if current_mode == 0:  # Mouse Mode
+            # Calculate effective mouse control window based on sensitivity factor
+            current_span_x = MOUSE_CTRL_WINDOW_X2 - MOUSE_CTRL_WINDOW_X1
+            current_span_y = MOUSE_CTRL_WINDOW_Y2 - MOUSE_CTRL_WINDOW_Y1
+
+            new_span_x = current_span_x * MOUSE_SENSITIVITY_FACTOR
+            new_span_y = current_span_y * MOUSE_SENSITIVITY_FACTOR
+
+            diff_x = current_span_x - new_span_x
+            diff_y = current_span_y - new_span_y
+
+            effective_X1 = MOUSE_CTRL_WINDOW_X1 + diff_x / 2
+            effective_X2 = MOUSE_CTRL_WINDOW_X2 - diff_x / 2
+            effective_Y1 = MOUSE_CTRL_WINDOW_Y1 + diff_y / 2
+            effective_Y2 = MOUSE_CTRL_WINDOW_Y2 - diff_y / 2
+
             # Map index finger position to screen coordinates
-            x_mouse = int(np.interp(index_x, (MOUSE_CTRL_WINDOW_X1, MOUSE_CTRL_WINDOW_X2), (0, RESOLUTION_W)))
-            y_mouse = int(np.interp(index_y, (MOUSE_CTRL_WINDOW_Y1, MOUSE_CTRL_WINDOW_Y2), (0, RESOLUTION_H)))
+            x_mouse = int(np.interp(index_x, (effective_X1, effective_X2), (0, RESOLUTION_W)))
+            y_mouse = int(np.interp(index_y, (effective_Y1, effective_Y2), (0, RESOLUTION_H)))
 
             # Smooth mouse movement
             self.prev_mouse_x = self.prev_mouse_x + (x_mouse - self.prev_mouse_x) / SMOOTHING

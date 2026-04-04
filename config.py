@@ -26,6 +26,7 @@ POWER_BUTTON_X1, POWER_BUTTON_X2 = int(CAP_WIDTH - round(CAP_WIDTH * 5 / 48) - 3
     CAP_WIDTH - 3)  # 0, round(CAP_WIDTH * 5 / 48)
 POWER_BUTTON_Y1, POWER_BUTTON_Y2 = 0, round(CAP_HEIGHT * 5 / 27)
 
+MOUSE_SENSITIVITY_FACTOR = 0.8 # Smaller value means faster mouse movement (higher sensitivity)
 SMOOTHING = 5  # Determines mouse movement sensitivity
 BASE_COLOR = (250, 0, 0)
 
