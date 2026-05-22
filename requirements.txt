@@ -1,4 +1,4 @@
-mediapipe==0.10.11
+mediapipe>=0.10.30
 numpy<2
 opencv-python-headless<4.10
 flask
