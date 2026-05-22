@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { io, Socket } from 'socket.io-client';
 import { 
@@ -6,12 +6,9 @@ import {
   Presentation, 
   Music, 
   Mic, 
-  Power, 
   ChevronRight, 
   Github, 
   Zap,
-  Hand,
-  Volume2,
   Video,
   Download,
   Server
