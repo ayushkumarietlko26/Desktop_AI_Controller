@@ -1,11 +1,7 @@
 mediapipe==0.10.11
 numpy<2
-opencv-python<4.10
-pyautogui
-pycaw
-pydub
-PyQt5
-SpeechRecognition
+opencv-python-headless<4.10
 flask
 flask-cors
-PyAudio
+flask-socketio
+eventlet
