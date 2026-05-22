@@ -1,4 +1,5 @@
 python-socketio[client]
+websocket-client
 pyautogui
 pycaw
 comtypes
