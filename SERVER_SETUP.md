@@ -12,7 +12,7 @@ This guide explains how to deploy the Backend to Render and how to run the Local
    - **Name**: `desktop-ai-controller` (or any name you like)
    - **Environment**: `Python 3`
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn -k eventlet -w 1 server:app`
+   - **Start Command**: `gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 server:app`
 6. Click **Create Web Service**.
 7. Wait for the deployment to finish. Once done, copy your **Render URL** (e.g., `https://desktop-ai-controller.onrender.com`).
 

@@ -4,5 +4,6 @@ opencv-python-headless<4.10
 flask
 flask-cors
 flask-socketio
-eventlet
+gevent
+gevent-websocket
 gunicorn
