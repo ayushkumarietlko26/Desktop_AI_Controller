@@ -119,6 +119,18 @@ def on_agent_command(data):
         pyautogui.press('left')
         time.sleep(0.5)
 
+    elif action == "MEDIA_NEXT":
+        pyautogui.press('nexttrack')
+        time.sleep(0.5)
+
+    elif action == "MEDIA_PREV":
+        pyautogui.press('prevtrack')
+        time.sleep(0.5)
+
+    elif action == "MEDIA_PLAY_PAUSE":
+        pyautogui.press('playpause')
+        time.sleep(0.5)
+
     # --- VOICE COMMANDS ---
     elif action == "VOICE_COMMAND":
         command = data.get('command', '')

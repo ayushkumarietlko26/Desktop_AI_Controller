@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamIntervalRef = useRef<number | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const recognitionRef = useRef<any>(null);
 
   // Initialize Speech Recognition
@@ -68,6 +69,7 @@ const App: React.FC = () => {
     socket.on('connect', () => {
       setIsConnected(true);
       socket.emit('join', { room: roomId, role: 'frontend' });
+      socket.emit('change_mode', { room: roomId, mode: activeMode });
     });
 
     socket.on('disconnect', () => {
@@ -79,6 +81,10 @@ const App: React.FC = () => {
       setProcessedImage(data.frame);
     });
 
+    socket.on('mode_changed', (data: { mode: number }) => {
+      setActiveMode(data.mode);
+    });
+
     socketRef.current = socket;
   };
 
@@ -86,6 +92,10 @@ const App: React.FC = () => {
     return () => {
       if (socketRef.current) socketRef.current.disconnect();
       if (streamIntervalRef.current) clearInterval(streamIntervalRef.current);
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
       if (videoRef.current?.srcObject) {
         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
         tracks.forEach(track => track.stop());
@@ -98,6 +108,11 @@ const App: React.FC = () => {
     if (isStreaming) {
       setIsStreaming(false);
       if (streamIntervalRef.current) clearInterval(streamIntervalRef.current);
+      if (workerRef.current) {
+        workerRef.current.postMessage('stop');
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
       if (videoRef.current?.srcObject) {
         const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
         tracks.forEach(track => track.stop());
@@ -113,16 +128,41 @@ const App: React.FC = () => {
         }
         setIsStreaming(true);
 
-        streamIntervalRef.current = window.setInterval(() => {
-          if (videoRef.current && canvasRef.current && socketRef.current && isConnected) {
-            const ctx = canvasRef.current.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(videoRef.current, 0, 0, 640, 480);
-              const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.5); // compress
-              socketRef.current.emit('video_frame', { room: roomId, frame: dataUrl });
+        // Web Worker to prevent background tab interval throttling
+        const workerCode = `
+          let intervalId = null;
+          self.onmessage = function(e) {
+            if (e.data === 'start') {
+              if (intervalId) clearInterval(intervalId);
+              intervalId = setInterval(() => {
+                self.postMessage('tick');
+              }, 100);
+            } else if (e.data === 'stop') {
+              if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+              }
+            }
+          };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const worker = new Worker(URL.createObjectURL(blob));
+
+        worker.onmessage = (e) => {
+          if (e.data === 'tick') {
+            if (videoRef.current && canvasRef.current && socketRef.current && isConnected) {
+              const ctx = canvasRef.current.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(videoRef.current, 0, 0, 640, 480);
+                const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.5); // compress
+                socketRef.current.emit('video_frame', { room: roomId, frame: dataUrl });
+              }
             }
           }
-        }, 100); // 10 FPS to save bandwidth
+        };
+
+        worker.postMessage('start');
+        workerRef.current = worker;
       } catch (err) {
         alert("Could not access webcam.");
         console.error(err);
@@ -235,6 +275,9 @@ const App: React.FC = () => {
                 {isConnected ? 'Connected' : 'Connect'}
               </button>
             </div>
+            <p style={{ fontSize: '0.85rem', color: '#eab308', marginTop: '10px', lineHeight: '1.4', textAlign: 'left' }}>
+              <strong>Tip for Background Tracking:</strong> Keep this browser window visible in the background or resize it smaller. If fully minimized to the taskbar, your browser will suspend your webcam hardware.
+            </p>
           </div>
 
           <div className="hero-btns">
@@ -272,10 +315,34 @@ const App: React.FC = () => {
                {modes[activeMode].name}
                <span className="status-indicator" style={{ backgroundColor: isConnected ? '#00ff00' : '#ff0000' }}></span>
              </div>
-             <div className="visual-display" style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {processedImage ? (
-                  <img src={processedImage} alt="Processed feed" style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
-                ) : (
+             <div className="visual-display" style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
+                {processedImage && (
+                  <img 
+                    src={processedImage} 
+                    alt="Processed feed" 
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', position: 'absolute', top: 0, left: 0, zIndex: 2 }} 
+                  />
+                )}
+
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  style={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    objectFit: 'cover', 
+                    transform: 'scaleX(-1)', 
+                    display: isStreaming ? 'block' : 'none',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    zIndex: 1
+                  }} 
+                />
+
+                {!isStreaming && !processedImage && (
                   <>
                     <Video size={100} strokeWidth={1} color={modes[activeMode].color} opacity={0.3} />
                     <AnimatePresence mode="wait">
@@ -297,8 +364,7 @@ const App: React.FC = () => {
         </motion.div>
       </main>
 
-      {/* Hidden video and canvas elements for streaming */}
-      <video ref={videoRef} style={{ display: 'none' }} />
+      {/* Hidden canvas element for streaming */}
       <canvas ref={canvasRef} width="640" height="480" style={{ display: 'none' }} />
 
       <section id="features" className="features-section">
@@ -312,7 +378,12 @@ const App: React.FC = () => {
             <motion.div 
               key={mode.id}
               className={`mode-card ${activeMode === mode.id ? 'active' : ''}`}
-              onClick={() => setActiveMode(mode.id)}
+              onClick={() => {
+                setActiveMode(mode.id);
+                if (socketRef.current && isConnected) {
+                  socketRef.current.emit('change_mode', { room: roomId, mode: mode.id });
+                }
+              }}
               whileHover={{ y: -10 }}
               style={{ '--accent': mode.color } as any}
             >
