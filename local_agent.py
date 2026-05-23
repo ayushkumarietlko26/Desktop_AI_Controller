@@ -60,6 +60,10 @@ def connect():
 def on_joined(data):
     print(f"[ACK] Server confirmed join: {data}")
 
+@sio.on('join_error')
+def on_join_error(data):
+    print(f"[ERROR] Server reported join error: {data.get('error')}")
+
 @sio.event
 def connect_error(data):
     print(f"[ERROR] Connection failed: {data}")

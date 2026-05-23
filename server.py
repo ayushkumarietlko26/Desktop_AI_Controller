@@ -27,13 +27,21 @@ def on_join(data):
     room = data.get('room')
     role = data.get('role')  # 'frontend' or 'agent'
     if room:
-        join_room(room)
-        if room not in room_detectors:
-            room_detectors[room] = htm.HandDetector(max_num_hands=1, min_detection_confidence=0.8)
-        if room not in room_modes:
-            room_modes[room] = 0  # Default to Mouse Mode (0)
-        print(f"[ROOM {room}] {role} joined (sid={request.sid})")
-        emit('joined', {'room': room, 'role': role})
+        try:
+            join_room(room)
+            if room not in room_detectors:
+                print(f"[ROOM {room}] Initializing HandDetector...")
+                room_detectors[room] = htm.HandDetector(max_num_hands=1, min_detection_confidence=0.8)
+                print(f"[ROOM {room}] HandDetector initialized successfully.")
+            if room not in room_modes:
+                room_modes[room] = 0  # Default to Mouse Mode (0)
+            print(f"[ROOM {room}] {role} joined (sid={request.sid})")
+            emit('joined', {'room': room, 'role': role})
+        except Exception as e:
+            print(f"[ROOM {room}] ERROR during join/initialization: {e}")
+            import traceback
+            traceback.print_exc()
+            emit('join_error', {'error': str(e)})
 
 @socketio.on('change_mode')
 def handle_change_mode(data):
