@@ -29,6 +29,7 @@ room_modes = {}
 mode_hold_times = {}
 last_media_playpause_time = {}
 room_processing = {}
+room_client_tracking = {}
 
 # MediaPipe runs on smaller frames; preview is upscaled for clearer video
 DISPLAY_WIDTH = 480
@@ -39,7 +40,7 @@ OUTPUT_JPEG_QUALITY = 68
 
 # Smaller margin / sensitivity = hand travels less distance for full screen sweep
 MOUSE_MARGIN = 0.10
-MOUSE_SENSITIVITY = 0.72
+MOUSE_SENSITIVITY = 0.8
 
 
 def map_hand_to_screen(index_x, index_y, width, height):
@@ -93,9 +94,17 @@ def index():
 def on_join(data):
     room = data.get("room")
     role = data.get("role")  # 'frontend' or 'agent'
+    client_tracking = data.get("client_tracking", False)
     if room:
         try:
             join_room(room)
+            if client_tracking and role == "frontend":
+                room_client_tracking[room] = True
+                room_modes.setdefault(room, 0)
+                room_processing.setdefault(room, False)
+                print(f"[ROOM {room}] frontend joined (client-side tracking, sid={request.sid})")
+                emit("joined", {"room": room, "role": role, "client_tracking": True})
+                return
             if room not in room_detectors:
                 print(f"[ROOM {room}] Initializing HandDetector...")
                 room_detectors[room] = htm.HandDetector(
@@ -125,11 +134,25 @@ def handle_change_mode(data):
     if room:
         room_modes[room] = mode
         print(f"[ROOM {room}] Mode changed to {mode} via frontend")
+        emit("mode_changed", {"mode": mode}, to=room)
+
+
+@socketio.on("relay_command")
+def relay_command(data):
+    """Instant relay: browser MediaPipe -> agent (no video processing)."""
+    room = data.get("room")
+    if not room:
+        return
+    payload = {k: v for k, v in data.items() if k != "room"}
+    if payload:
+        emit("agent_command", payload, to=room)
 
 
 @socketio.on("video_frame")
 def handle_video_frame(data):
     room = data.get("room")
+    if room_client_tracking.get(room):
+        return
     if not room or room not in room_detectors:
         return
 

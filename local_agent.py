@@ -40,8 +40,8 @@ if IS_WINDOWS:
 
 # High-frequency local cursor loop fills gaps between cloud updates (~10 fps)
 MOUSE_TICK_HZ = 120
-MOUSE_LERP = 0.72
-PREDICT_MS = 0.10
+MOUSE_LERP = 0.88
+PREDICT_MS = 0.14
 
 mouse_lock = threading.Lock()
 target_x, target_y = pyautogui.position()
