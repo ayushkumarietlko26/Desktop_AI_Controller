@@ -4,8 +4,8 @@ export const TRACK_WIDTH = 480;
 export const TRACK_HEIGHT = 360;
 
 const FINGER_TIP_IDS = [4, 8, 12, 16, 20];
-const MOUSE_MARGIN = 0.1;
-const MOUSE_SENSITIVITY = 0.8;
+const MOUSE_MARGIN = 0.12;
+const MOUSE_SENSITIVITY = 0.68;
 
 export type PixelLandmark = [id: number, x: number, y: number];
 export type AgentCommand = {
@@ -171,7 +171,8 @@ export function processGestures(
   mode: number,
   state: GestureState,
   width: number,
-  height: number
+  height: number,
+  pointer?: { x: number; y: number } | null
 ): GestureResult {
   const indexX = lm[8][1];
   const indexY = lm[8][2];
@@ -200,8 +201,9 @@ export function processGestures(
   let command: AgentCommand | null = null;
 
   if (currentMode === 0) {
-    if (isIndexExtended(lm)) {
-      const { x, y } = mapHandToScreen(indexX, indexY, width, height);
+    const canMove = pointer || isIndexExtended(lm);
+    if (canMove) {
+      const { x, y } = pointer ?? mapHandToScreen(indexX, indexY, width, height);
       const action = resolveMouseAction(fingers, lm, width);
       command = { action, x, y };
     }

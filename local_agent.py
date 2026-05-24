@@ -38,15 +38,15 @@ if IS_WINDOWS:
     import ctypes
     _user32 = ctypes.windll.user32
 
-# High-frequency local cursor loop fills gaps between cloud updates (~10 fps)
+# Smooth cursor — dead zone stops micro-oscillation when hand is still
 MOUSE_TICK_HZ = 120
-MOUSE_LERP = 0.88
-PREDICT_MS = 0.14
+MOUSE_LERP = 0.36
+TARGET_BLEND = 0.45
+DEAD_ZONE_PX = 4
 
 mouse_lock = threading.Lock()
 target_x, target_y = pyautogui.position()
 cursor_x, cursor_y = float(target_x), float(target_y)
-vel_x, vel_y = 0.0, 0.0
 target_updated_at = time.time()
 mouse_down = False
 interpolator_running = True
@@ -54,7 +54,7 @@ move_log_counter = 0
 
 
 def set_cursor(x, y):
-    ix, iy = int(x), int(y)
+    ix, iy = int(round(x)), int(round(y))
     if IS_WINDOWS:
         _user32.SetCursorPos(ix, iy)
     else:
@@ -69,17 +69,19 @@ def snap_cursor_to_target():
 
 
 def update_mouse_target(norm_x, norm_y):
-    global target_x, target_y, vel_x, vel_y, target_updated_at
+    global target_x, target_y, target_updated_at
     new_x = max(0, min(SCREEN_W - 1, norm_x * SCREEN_W))
     new_y = max(0, min(SCREEN_H - 1, norm_y * SCREEN_H))
     now = time.time()
 
     with mouse_lock:
-        dt = now - target_updated_at
-        if 0 < dt < 0.35:
-            vel_x = (new_x - target_x) / dt
-            vel_y = (new_y - target_y) / dt
-        target_x, target_y = new_x, new_y
+        if (
+            abs(new_x - target_x) < DEAD_ZONE_PX
+            and abs(new_y - target_y) < DEAD_ZONE_PX
+        ):
+            return
+        target_x += (new_x - target_x) * TARGET_BLEND
+        target_y += (new_y - target_y) * TARGET_BLEND
         target_updated_at = now
 
 
@@ -88,25 +90,16 @@ def mouse_interpolator():
     tick = 1.0 / MOUSE_TICK_HZ
     while interpolator_running:
         with mouse_lock:
-            elapsed = time.time() - target_updated_at
             aim_x, aim_y = target_x, target_y
-            if elapsed < PREDICT_MS:
-                aim_x += vel_x * elapsed
-                aim_y += vel_y * elapsed
-                aim_x = max(0, min(SCREEN_W - 1, aim_x))
-                aim_y = max(0, min(SCREEN_H - 1, aim_y))
 
         cursor_x += (aim_x - cursor_x) * MOUSE_LERP
         cursor_y += (aim_y - cursor_y) * MOUSE_LERP
-
-        if abs(aim_x - cursor_x) > 0.4 or abs(aim_y - cursor_y) > 0.4:
-            set_cursor(cursor_x, cursor_y)
-
+        set_cursor(cursor_x, cursor_y)
         time.sleep(tick)
 
 
 threading.Thread(target=mouse_interpolator, daemon=True).start()
-print(f"[OK] Mouse interpolator running at {MOUSE_TICK_HZ} Hz")
+print(f"[OK] Mouse interpolator {MOUSE_TICK_HZ}Hz (dead-zone anti-shake)")
 
 # Prompt for connection details
 print()

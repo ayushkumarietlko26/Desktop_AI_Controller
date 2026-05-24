@@ -23,6 +23,7 @@ import {
   processGestures,
   readHandedness,
 } from './gestureEngine';
+import { SmoothPointer, indexTipPixels } from './smoothPointer';
 
 const DEFAULT_SERVER_URL =
   import.meta.env.VITE_SERVER_URL || 'https://desktop-ai-controller-16.onrender.com';
@@ -50,6 +51,9 @@ const App: React.FC = () => {
   const recognitionRef = useRef<any>(null);
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const gestureStateRef = useRef(new GestureState());
+  const smoothPointerRef = useRef(new SmoothPointer());
+  const lastEmitRef = useRef({ x: 0.5, y: 0.5 });
+  const EMIT_DEADZONE = 0.005;
   const rafRef = useRef<number | null>(null);
   const roomIdRef = useRef(roomId);
   const activeModeRef = useRef(activeMode);
@@ -115,12 +119,22 @@ const App: React.FC = () => {
 
   const emitCommand = useCallback((action: string, x?: number, y?: number) => {
     if (!socketRef.current?.connected) return;
+
+    if (action === 'MOUSE_MOVE' && x !== undefined && y !== undefined) {
+      const dx = x - lastEmitRef.current.x;
+      const dy = y - lastEmitRef.current.y;
+      if (Math.hypot(dx, dy) < EMIT_DEADZONE) {
+        return;
+      }
+      lastEmitRef.current = { x, y };
+    }
+
     const payload: Record<string, unknown> = {
       room: roomIdRef.current,
       action,
     };
-    if (x !== undefined) payload.x = x;
-    if (y !== undefined) payload.y = y;
+    if (x !== undefined) payload.x = Math.round(x * 10000) / 10000;
+    if (y !== undefined) payload.y = Math.round(y * 10000) / 10000;
     socketRef.current.emit('relay_command', payload);
     setCmdCount((c) => c + 1);
   }, []);
@@ -153,19 +167,28 @@ const App: React.FC = () => {
     }
 
     if (result.landmarks?.length) {
-      const lm = toPixelLandmarks(
-        result.landmarks[0],
-        TRACK_WIDTH,
-        TRACK_HEIGHT
-      );
+      const rawLm = result.landmarks[0];
+      const lm = toPixelLandmarks(rawLm, TRACK_WIDTH, TRACK_HEIGHT);
       const handedness = readHandedness(result);
+      const tip = indexTipPixels(rawLm, TRACK_WIDTH, TRACK_HEIGHT);
+      const pointer =
+        activeModeRef.current === 0
+          ? smoothPointerRef.current.update(
+              tip.x,
+              tip.y,
+              TRACK_WIDTH,
+              TRACK_HEIGHT,
+              tip.extended
+            )
+          : null;
       const { command, modeChange } = processGestures(
         lm,
         handedness,
         activeModeRef.current,
         gestureStateRef.current,
         TRACK_WIDTH,
-        TRACK_HEIGHT
+        TRACK_HEIGHT,
+        pointer
       );
 
       if (modeChange !== null) {
@@ -191,6 +214,11 @@ const App: React.FC = () => {
         }
       } else {
         lastClickActionRef.current = '';
+      }
+    } else if (activeModeRef.current === 0) {
+      const coast = smoothPointerRef.current.coastOnly();
+      if (coast) {
+        emitCommand('MOUSE_MOVE', coast.x, coast.y);
       }
     }
 
@@ -263,6 +291,8 @@ const App: React.FC = () => {
       videoRef.current.srcObject = null;
     }
     gestureStateRef.current = new GestureState();
+    smoothPointerRef.current.reset();
+    lastEmitRef.current = { x: 0.5, y: 0.5 };
     setIsStreaming(false);
     setFps(0);
   }, []);

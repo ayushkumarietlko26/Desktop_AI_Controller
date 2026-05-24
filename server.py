@@ -40,7 +40,7 @@ OUTPUT_JPEG_QUALITY = 68
 
 # Smaller margin / sensitivity = hand travels less distance for full screen sweep
 MOUSE_MARGIN = 0.10
-MOUSE_SENSITIVITY = 0.8
+MOUSE_SENSITIVITY = 0.68
 
 
 def map_hand_to_screen(index_x, index_y, width, height):
