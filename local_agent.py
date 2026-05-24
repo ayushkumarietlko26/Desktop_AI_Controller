@@ -38,18 +38,22 @@ if IS_WINDOWS:
     import ctypes
     _user32 = ctypes.windll.user32
 
-# Smooth cursor — dead zone stops micro-oscillation when hand is still
+# Smooth cursor — only takes over when remote hand commands are active
 MOUSE_TICK_HZ = 120
 MOUSE_LERP = 0.36
 TARGET_BLEND = 0.45
 DEAD_ZONE_PX = 4
+IDLE_RELEASE_SEC = 2.0
 
 mouse_lock = threading.Lock()
-target_x, target_y = pyautogui.position()
-cursor_x, cursor_y = float(target_x), float(target_y)
-target_updated_at = time.time()
+target_x, target_y = 0.0, 0.0
+cursor_x, cursor_y = 0.0, 0.0
+target_updated_at = 0.0
+last_command_at = 0.0
+control_active = False
 mouse_down = False
-interpolator_running = True
+interpolator_running = False
+interpolator_thread = None
 move_log_counter = 0
 
 
@@ -61,34 +65,75 @@ def set_cursor(x, y):
         pyautogui.moveTo(ix, iy)
 
 
+def sync_cursor_state():
+    """Align internal state with the real cursor (does not move the mouse)."""
+    global target_x, target_y, cursor_x, cursor_y
+    px, py = pyautogui.position()
+    with mouse_lock:
+        target_x, target_y = float(px), float(py)
+        cursor_x, cursor_y = float(px), float(py)
+
+
+def activate_control():
+    global control_active, last_command_at
+    if not control_active:
+        sync_cursor_state()
+        control_active = True
+        print("[CONTROL] Hand control active (cursor follows your gesture).")
+    last_command_at = time.time()
+
+
+def release_control():
+    global control_active, mouse_down
+    if not control_active:
+        return
+    control_active = False
+    if mouse_down:
+        pyautogui.mouseUp()
+        mouse_down = False
+    print("[CONTROL] Cursor released — your trackpad/mouse works normally again.")
+
+
 def snap_cursor_to_target():
     global cursor_x, cursor_y
     with mouse_lock:
         cursor_x, cursor_y = target_x, target_y
-    set_cursor(cursor_x, cursor_y)
+    if control_active:
+        set_cursor(cursor_x, cursor_y)
 
 
 def update_mouse_target(norm_x, norm_y):
-    global target_x, target_y, target_updated_at
+    global target_x, target_y, target_updated_at, last_command_at
+    activate_control()
     new_x = max(0, min(SCREEN_W - 1, norm_x * SCREEN_W))
     new_y = max(0, min(SCREEN_H - 1, norm_y * SCREEN_H))
-    now = time.time()
 
     with mouse_lock:
         if (
             abs(new_x - target_x) < DEAD_ZONE_PX
             and abs(new_y - target_y) < DEAD_ZONE_PX
         ):
+            last_command_at = time.time()
             return
         target_x += (new_x - target_x) * TARGET_BLEND
         target_y += (new_y - target_y) * TARGET_BLEND
-        target_updated_at = now
+        target_updated_at = time.time()
+        last_command_at = time.time()
 
 
 def mouse_interpolator():
     global cursor_x, cursor_y
     tick = 1.0 / MOUSE_TICK_HZ
     while interpolator_running:
+        if not control_active:
+            time.sleep(0.05)
+            continue
+
+        if time.time() - last_command_at > IDLE_RELEASE_SEC:
+            release_control()
+            time.sleep(0.05)
+            continue
+
         with mouse_lock:
             aim_x, aim_y = target_x, target_y
 
@@ -98,8 +143,22 @@ def mouse_interpolator():
         time.sleep(tick)
 
 
-threading.Thread(target=mouse_interpolator, daemon=True).start()
-print(f"[OK] Mouse interpolator {MOUSE_TICK_HZ}Hz (dead-zone anti-shake)")
+def start_interpolator():
+    global interpolator_running, interpolator_thread
+    if interpolator_thread and interpolator_thread.is_alive():
+        return
+    interpolator_running = True
+    interpolator_thread = threading.Thread(target=mouse_interpolator, daemon=True)
+    interpolator_thread.start()
+
+
+def stop_interpolator():
+    global interpolator_running
+    interpolator_running = False
+    release_control()
+
+
+print("[OK] Agent ready — your mouse stays free until the browser sends hand commands.")
 
 # Prompt for connection details
 print()
@@ -140,6 +199,7 @@ def connect_error(data):
 @sio.event
 def disconnect():
     print("[DISCONNECTED] Lost connection to server.")
+    release_control()
 
 
 @sio.on("agent_command")
@@ -219,8 +279,10 @@ def on_agent_command(data):
 
 
 if __name__ == "__main__":
+    start_interpolator()
     try:
         print(f"Connecting to {SERVER_URL} ...")
+        print("(You can still use your mouse normally while waiting.)")
         sio.connect(SERVER_URL, transports=["websocket"])
         sio.wait()
     except KeyboardInterrupt:
@@ -228,5 +290,5 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[ERROR] {e}")
     finally:
-        interpolator_running = False
+        stop_interpolator()
         input("\nPress Enter to exit...")
