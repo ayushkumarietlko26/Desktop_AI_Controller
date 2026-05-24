@@ -18,10 +18,12 @@ import {
 import { createHandLandmarker, drawHandPreview, detectHandsFromVideo } from './handTracker';
 import {
   BackgroundSession,
-  enterPictureInPicture,
+  enterSmallPictureInPicture,
   isDocumentHidden,
   leavePictureInPicture,
+  hiddenVideoStyle,
 } from './backgroundSession';
+import { openCompanionWindow } from './companionWindow';
 import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
@@ -53,6 +55,7 @@ const App: React.FC = () => {
   const [agentPaired, setAgentPaired] = useState(false);
   const [runningInBackground, setRunningInBackground] = useState(false);
   const [pipActive, setPipActive] = useState(false);
+  const [miniWindowActive, setMiniWindowActive] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -73,6 +76,8 @@ const App: React.FC = () => {
   const isStreamingRef = useRef(false);
   const bgIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const backgroundSessionRef = useRef(new BackgroundSession());
+  const companionWindowRef = useRef<Window | null>(null);
+  const miniWindowActiveRef = useRef(false);
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -345,6 +350,12 @@ const App: React.FC = () => {
     void backgroundSessionRef.current.stop();
     void leavePictureInPicture();
     setPipActive(false);
+    if (companionWindowRef.current && !companionWindowRef.current.closed) {
+      companionWindowRef.current.close();
+    }
+    companionWindowRef.current = null;
+    miniWindowActiveRef.current = false;
+    setMiniWindowActive(false);
     if (videoRef.current?.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach((t) => t.stop());
@@ -379,7 +390,6 @@ const App: React.FC = () => {
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('disablePictureInPicture', 'false');
         await videoRef.current.play();
       }
       isStreamingRef.current = true;
@@ -420,8 +430,12 @@ const App: React.FC = () => {
         }
         await videoRef.current?.play().catch(() => {});
         startBackgroundInterval();
-        const pip = await enterPictureInPicture(videoRef.current);
-        setPipActive(pip);
+        const stream = videoRef.current?.srcObject as MediaStream | null;
+        const pip = await enterSmallPictureInPicture(
+          stream,
+          videoRef.current
+        );
+        setPipActive(pip.ok);
       } else {
         stopBackgroundInterval();
         await leavePictureInPicture();
@@ -442,14 +456,77 @@ const App: React.FC = () => {
 
   const togglePictureInPicture = async () => {
     const video = videoRef.current;
-    if (!video || !isStreaming) return;
-    if (document.pictureInPictureElement === video) {
+    const stream = video?.srcObject as MediaStream | null;
+    if (!isStreaming || !stream) {
+      alert('Start the camera first.');
+      return;
+    }
+    if (pipActive) {
       await leavePictureInPicture();
       setPipActive(false);
-    } else {
-      const ok = await enterPictureInPicture(video);
-      setPipActive(ok);
+      return;
     }
+    const result = await enterSmallPictureInPicture(stream, video);
+    if (result.ok) {
+      setPipActive(true);
+    } else {
+      alert(
+        result.message ||
+          'Small pop-out failed. Use Chrome/Edge, or click Mini Window instead.'
+      );
+    }
+  };
+
+  const openMiniWindow = () => {
+    if (!isStreaming || !videoRef.current?.srcObject) {
+      alert('Start the camera first.');
+      return;
+    }
+    if (companionWindowRef.current && !companionWindowRef.current.closed) {
+      companionWindowRef.current.focus();
+      return;
+    }
+
+    const w = openCompanionWindow({
+      roomId: roomIdRef.current,
+      serverUrl,
+      mode: activeModeRef.current,
+    });
+    if (!w) {
+      alert(
+        'Pop-up was blocked. In your browser address bar, allow pop-ups for this site, then try again.'
+      );
+      return;
+    }
+    companionWindowRef.current = w;
+
+    const onCompanionMessage = (e: MessageEvent) => {
+      if (e.source !== w || e.data?.type !== 'companion-ready') return;
+      w.postMessage(
+        {
+          type: 'init-stream',
+          stream: videoRef.current?.srcObject,
+          mode: activeModeRef.current,
+        },
+        window.location.origin
+      );
+      stopTrackingScheduler();
+      miniWindowActiveRef.current = true;
+      setMiniWindowActive(true);
+    };
+    window.addEventListener('message', onCompanionMessage);
+
+    const closeCheck = window.setInterval(() => {
+      if (!w.closed) return;
+      window.clearInterval(closeCheck);
+      window.removeEventListener('message', onCompanionMessage);
+      companionWindowRef.current = null;
+      miniWindowActiveRef.current = false;
+      setMiniWindowActive(false);
+      if (isStreamingRef.current) {
+        startTrackingScheduler();
+      }
+    }, 400);
   };
 
   const toggleJarvis = () => {
@@ -532,12 +609,14 @@ const App: React.FC = () => {
     : !trackerReady
       ? 'Loading MediaPipe...'
       : isStreaming
-        ? runningInBackground || pipActive
-          ? `Background mode · ${fps} fps · ${cmdCount} cmds · hand control active`
-          : agentPaired
-            ? `Tracking ${fps} fps · ${cmdCount} commands · extend index finger to move`
-            : `Tracking ${fps} fps · start local_agent.py (Room: ${roomId})`
-        : 'Connect & start camera. Minimize OK — auto pop-out camera keeps control running.';
+        ? miniWindowActive
+          ? `Mini window active · minimize this tab freely`
+          : runningInBackground || pipActive
+            ? `Background / pop-out · ${fps} fps · hand control on`
+            : agentPaired
+              ? `Tracking ${fps} fps · ${cmdCount} sent · use Mini Window to minimize`
+              : `Tracking ${fps} fps · start local_agent.py (Room: ${roomId})`
+        : 'Connect & start camera. Use Mini Window (best) or Small Pop-out, then minimize.';
 
   return (
     <div className="app-container">
@@ -678,13 +757,13 @@ const App: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={togglePictureInPicture}
+              onClick={openMiniWindow}
               disabled={!isStreaming}
-              title="Pop camera out so control works when the browser is minimized"
+              title="Opens a tiny window — keeps control when browser is minimized"
               style={{
-                border: '1px solid #888',
-                color: pipActive ? '#000' : '#ccc',
-                backgroundColor: pipActive ? '#00ffcc' : 'transparent',
+                border: '1px solid #00ffcc',
+                color: miniWindowActive ? '#000' : '#00ffcc',
+                backgroundColor: miniWindowActive ? '#00ffcc' : 'transparent',
                 padding: '10px 14px',
                 borderRadius: '8px',
                 cursor: isStreaming ? 'pointer' : 'not-allowed',
@@ -695,7 +774,28 @@ const App: React.FC = () => {
               }}
             >
               <PictureInPicture size={18} />
-              {pipActive ? 'Pop-out On' : 'Pop-out Camera'}
+              {miniWindowActive ? 'Mini Window On' : 'Mini Window'}
+            </button>
+            <button
+              type="button"
+              onClick={togglePictureInPicture}
+              disabled={!isStreaming}
+              title="Small floating camera (Chrome/Edge)"
+              style={{
+                border: '1px solid #888',
+                color: pipActive ? '#000' : '#ccc',
+                backgroundColor: pipActive ? '#ccc' : 'transparent',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                cursor: isStreaming ? 'pointer' : 'not-allowed',
+                opacity: isStreaming ? 1 : 0.45,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '13px',
+              }}
+            >
+              Small Pop-out
             </button>
           </div>
         </motion.div>
@@ -754,7 +854,8 @@ const App: React.FC = () => {
                 autoPlay
                 playsInline
                 muted
-                style={{ display: 'none' }}
+                disablePictureInPicture={false}
+                style={hiddenVideoStyle}
               />
 
               {!isStreaming && (
