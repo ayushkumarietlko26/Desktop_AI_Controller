@@ -32,14 +32,27 @@ export function toPixelLandmarks(
   ]);
 }
 
+/** Selfie camera: flip MediaPipe handedness label for thumb detection */
+export function effectiveHandedness(label: string): string {
+  const n = label.toLowerCase();
+  if (n.includes('left')) return 'Right';
+  if (n.includes('right')) return 'Left';
+  return 'Right';
+}
+
+export function isIndexExtended(lm: PixelLandmark[]): boolean {
+  return lm[8][2] < lm[6][2] - 8;
+}
+
 export function fingersUp(
   lm: PixelLandmark[],
   handedness: string
 ): number[] {
+  const hand = effectiveHandedness(handedness);
   const result: number[] = [];
   const thumb = lm[4];
   const thumbBase = lm[3];
-  if (handedness === 'Left') {
+  if (hand === 'Left') {
     result.push(thumb[1] > thumbBase[1] ? 1 : 0);
   } else {
     result.push(thumb[1] < thumbBase[1] ? 1 : 0);
@@ -104,22 +117,21 @@ function resolveMouseAction(
   fingers: number[],
   lm: PixelLandmark[],
   width: number
-): string | null {
-  if (fingers[1] !== 1) return null;
+): string {
   const clickDist = clickThreshold(width);
+  const pattern = fingers.join('');
 
-  if (fingers.join('') === '01000') return 'MOUSE_MOVE';
-  if (fingers.join('') === '01100') {
+  if (pattern === '01100') {
     return fingerDistance(lm, 1, 2) < clickDist
       ? 'MOUSE_CLICK_LEFT'
       : 'MOUSE_MOVE';
   }
-  if (fingers.join('') === '11000') {
+  if (pattern === '11000') {
     return fingerDistance(lm, 0, 1) < clickDist
       ? 'MOUSE_CLICK_RIGHT'
       : 'MOUSE_MOVE';
   }
-  if (fingers.join('') === '01001') {
+  if (pattern === '01001') {
     return fingerDistance(lm, 1, 4) < clickDist ? 'MOUSE_DRAG' : 'MOUSE_MOVE';
   }
   return 'MOUSE_MOVE';
@@ -188,9 +200,9 @@ export function processGestures(
   let command: AgentCommand | null = null;
 
   if (currentMode === 0) {
-    const { x, y } = mapHandToScreen(indexX, indexY, width, height);
-    const action = resolveMouseAction(fingers, lm, width);
-    if (action) {
+    if (isIndexExtended(lm)) {
+      const { x, y } = mapHandToScreen(indexX, indexY, width, height);
+      const action = resolveMouseAction(fingers, lm, width);
       command = { action, x, y };
     }
   } else if (currentMode === 1) {
@@ -217,4 +229,14 @@ export function processGestures(
   }
 
   return { command, modeChange };
+}
+
+/** Read handedness from MediaPipe result (API uses `handedness` or `handednesses`) */
+export function readHandedness(result: {
+  handedness?: Array<Array<{ categoryName?: string; displayName?: string }>>;
+  handednesses?: Array<Array<{ categoryName?: string; displayName?: string }>>;
+}): string {
+  const batch = result.handednesses?.[0] ?? result.handedness?.[0];
+  const cat = batch?.[0];
+  return cat?.categoryName || cat?.displayName || 'Right';
 }

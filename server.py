@@ -90,9 +90,15 @@ def index():
     return "Desktop AI Controller Cloud Server is running!"
 
 
+def normalize_room(room):
+    if not room:
+        return None
+    return str(room).strip().upper()
+
+
 @socketio.on("join")
 def on_join(data):
-    room = data.get("room")
+    room = normalize_room(data.get("room"))
     role = data.get("role")  # 'frontend' or 'agent'
     client_tracking = data.get("client_tracking", False)
     if room:
@@ -104,6 +110,11 @@ def on_join(data):
                 room_processing.setdefault(room, False)
                 print(f"[ROOM {room}] frontend joined (client-side tracking, sid={request.sid})")
                 emit("joined", {"room": room, "role": role, "client_tracking": True})
+                return
+            if role == "agent":
+                print(f"[ROOM {room}] agent joined (sid={request.sid})")
+                emit("joined", {"room": room, "role": role})
+                emit("agent_joined", {"room": room}, to=room)
                 return
             if room not in room_detectors:
                 print(f"[ROOM {room}] Initializing HandDetector...")
@@ -129,7 +140,7 @@ def on_join(data):
 
 @socketio.on("change_mode")
 def handle_change_mode(data):
-    room = data.get("room")
+    room = normalize_room(data.get("room"))
     mode = data.get("mode", 0)
     if room:
         room_modes[room] = mode
@@ -137,20 +148,27 @@ def handle_change_mode(data):
         emit("mode_changed", {"mode": mode}, to=room)
 
 
+relay_log_counter = {}
+
+
 @socketio.on("relay_command")
 def relay_command(data):
     """Instant relay: browser MediaPipe -> agent (no video processing)."""
-    room = data.get("room")
+    room = normalize_room(data.get("room"))
     if not room:
         return
     payload = {k: v for k, v in data.items() if k != "room"}
-    if payload:
-        emit("agent_command", payload, to=room)
+    if not payload:
+        return
+    emit("agent_command", payload, to=room)
+    relay_log_counter[room] = relay_log_counter.get(room, 0) + 1
+    if relay_log_counter[room] % 120 == 1:
+        print(f"[ROOM {room}] relay {payload.get('action')} x={payload.get('x')} y={payload.get('y')}")
 
 
 @socketio.on("video_frame")
 def handle_video_frame(data):
-    room = data.get("room")
+    room = normalize_room(data.get("room"))
     if room_client_tracking.get(room):
         return
     if not room or room not in room_detectors:
@@ -280,7 +298,7 @@ def handle_video_frame(data):
 
 @socketio.on("voice_command")
 def handle_voice_command(data):
-    room = data.get("room")
+    room = normalize_room(data.get("room"))
     command = data.get("command", "")
     if room and command:
         print(f"[ROOM {room}] Voice command: {command}")

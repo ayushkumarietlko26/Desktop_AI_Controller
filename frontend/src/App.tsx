@@ -21,6 +21,7 @@ import {
   GestureState,
   toPixelLandmarks,
   processGestures,
+  readHandedness,
 } from './gestureEngine';
 
 const DEFAULT_SERVER_URL =
@@ -40,6 +41,8 @@ const App: React.FC = () => {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [trackerReady, setTrackerReady] = useState(false);
   const [fps, setFps] = useState(0);
+  const [cmdCount, setCmdCount] = useState(0);
+  const [agentPaired, setAgentPaired] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -119,6 +122,7 @@ const App: React.FC = () => {
     if (x !== undefined) payload.x = x;
     if (y !== undefined) payload.y = y;
     socketRef.current.emit('relay_command', payload);
+    setCmdCount((c) => c + 1);
   }, []);
 
   const trackingLoop = useCallback(() => {
@@ -148,14 +152,13 @@ const App: React.FC = () => {
       lastFrameTimeRef.current = now;
     }
 
-    if (result.landmarks?.length && result.handednesses?.length) {
+    if (result.landmarks?.length) {
       const lm = toPixelLandmarks(
         result.landmarks[0],
         TRACK_WIDTH,
         TRACK_HEIGHT
       );
-      const handedness =
-        result.handednesses[0][0].categoryName || 'Right';
+      const handedness = readHandedness(result);
       const { command, modeChange } = processGestures(
         lm,
         handedness,
@@ -175,17 +178,15 @@ const App: React.FC = () => {
       }
 
       if (command) {
-        const isMove = command.action === 'MOUSE_MOVE';
-        const isClick = command.action.includes('CLICK') || command.action === 'MOUSE_DRAG';
-        if (isMove) {
-          emitCommand(command.action, command.x, command.y);
-        } else if (isClick) {
+        const isClick =
+          command.action.includes('CLICK') || command.action === 'MOUSE_DRAG';
+        if (isClick) {
           if (lastClickActionRef.current !== command.action) {
             emitCommand(command.action, command.x, command.y);
             lastClickActionRef.current = command.action;
           }
         } else {
-          emitCommand(command.action);
+          emitCommand(command.action, command.x, command.y);
           lastClickActionRef.current = '';
         }
       } else {
@@ -215,12 +216,18 @@ const App: React.FC = () => {
     socket.on('connect', () => {
       setIsConnected(true);
       setConnectionError(null);
+      const room = roomIdRef.current.trim().toUpperCase();
+      roomIdRef.current = room;
       socket.emit('join', {
-        room: roomId,
+        room,
         role: 'frontend',
         client_tracking: true,
       });
-      socket.emit('change_mode', { room: roomId, mode: activeModeRef.current });
+      socket.emit('change_mode', { room, mode: activeModeRef.current });
+    });
+
+    socket.on('agent_joined', () => {
+      setAgentPaired(true);
     });
 
     socket.on('connect_error', (err) => {
@@ -284,6 +291,14 @@ const App: React.FC = () => {
         await videoRef.current.play();
       }
       setIsStreaming(true);
+      setCmdCount(0);
+      const room = roomIdRef.current.trim().toUpperCase();
+      roomIdRef.current = room;
+      socketRef.current?.emit('join', {
+        room,
+        role: 'frontend',
+        client_tracking: true,
+      });
       lastFrameTimeRef.current = performance.now();
       frameCountRef.current = 0;
       rafRef.current = requestAnimationFrame(trackingLoop);
@@ -378,10 +393,12 @@ const App: React.FC = () => {
   const statusText = connectionError
     ? connectionError
     : !trackerReady
-      ? 'Loading MediaPipe (runs in your browser for zero-lag control)...'
+      ? 'Loading MediaPipe...'
       : isStreaming
-        ? `Live tracking ${fps} fps · instant mouse relay`
-        : 'Connect, then start camera. Hand tracking runs locally — no video round-trip lag.';
+        ? agentPaired
+          ? `Tracking ${fps} fps · ${cmdCount} commands sent · extend index finger to move mouse`
+          : `Tracking ${fps} fps · ${cmdCount} commands sent · start local_agent.py on your PC (Room: ${roomId})`
+        : 'Connect, then start camera. Run local_agent.py on your PC with the same Room ID.';
 
   return (
     <div className="app-container">

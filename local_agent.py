@@ -111,7 +111,7 @@ print(f"[OK] Mouse interpolator running at {MOUSE_TICK_HZ} Hz")
 # Prompt for connection details
 print()
 SERVER_URL = input("Enter Cloud Server URL (e.g. https://your-app.onrender.com): ").strip()
-ROOM_ID = input("Enter Room ID shown on the frontend page: ").strip()
+ROOM_ID = input("Enter Room ID shown on the frontend page: ").strip().upper()
 print()
 
 sio = socketio.Client(
