@@ -34,6 +34,52 @@ room_processing = {}
 PROCESS_WIDTH = 320
 PROCESS_HEIGHT = 240
 
+# Smaller margin / sensitivity = hand travels less distance for full screen sweep
+MOUSE_MARGIN = 0.10
+MOUSE_SENSITIVITY = 0.72
+
+
+def map_hand_to_screen(index_x, index_y, width, height):
+    """Map index-finger pixel coords to normalized screen position (0-1)."""
+    margin_x = width * MOUSE_MARGIN
+    margin_y = height * MOUSE_MARGIN
+    span_x = (width - 2 * margin_x) * MOUSE_SENSITIVITY
+    span_y = (height - 2 * margin_y) * MOUSE_SENSITIVITY
+    center_x = width / 2
+    center_y = height / 2
+
+    effective_x1 = center_x - span_x / 2
+    effective_x2 = center_x + span_x / 2
+    effective_y1 = center_y - span_y / 2
+    effective_y2 = center_y + span_y / 2
+
+    norm_x = 1.0 - float(np.interp(index_x, (effective_x1, effective_x2), (0, 1)))
+    norm_y = float(np.interp(index_y, (effective_y1, effective_y2), (0, 1)))
+    return float(np.clip(norm_x, 0, 1)), float(np.clip(norm_y, 0, 1))
+
+
+def resolve_mouse_action(fingers_up, detector, img, hand1_landmarks):
+    """Return mouse action string or None. Position is always sent separately."""
+    if fingers_up[1] != 1:
+        return None
+
+    if fingers_up == [0, 1, 0, 0, 0]:
+        return "MOUSE_MOVE"
+
+    if fingers_up == [0, 1, 1, 0, 0]:
+        dist, img, _ = detector.find_distance(img, hand1_landmarks, 1, 2, draw=True)
+        return "MOUSE_CLICK_LEFT" if dist < 30 else "MOUSE_MOVE"
+
+    if fingers_up == [1, 1, 0, 0, 0]:
+        dist, img, _ = detector.find_distance(img, hand1_landmarks, 0, 1, draw=True)
+        return "MOUSE_CLICK_RIGHT" if dist < 30 else "MOUSE_MOVE"
+
+    if fingers_up == [0, 1, 0, 0, 1]:
+        dist, img, _ = detector.find_distance(img, hand1_landmarks, 1, 4, draw=True)
+        return "MOUSE_DRAG" if dist < 30 else "MOUSE_MOVE"
+
+    return "MOUSE_MOVE"
+
 
 @app.route("/")
 def index():
@@ -121,9 +167,6 @@ def handle_video_frame(data):
             index_x, index_y = hand1_landmarks[8][1], hand1_landmarks[8][2]
             fingers_up = detector.fingers_up(hand1_landmarks, hand1_type)
 
-            norm_x = 1.0 - (index_x / width)
-            norm_y = index_y / height
-
             if fingers_up == [0, 1, 1, 1, 0]:
                 hold_start = mode_hold_times.get(room)
                 if not hold_start:
@@ -141,18 +184,14 @@ def handle_video_frame(data):
             action = None
 
             if current_mode == 0:
-                if fingers_up == [0, 1, 0, 0, 0]:
-                    action = "MOUSE_MOVE"
-                elif fingers_up == [0, 1, 1, 0, 0]:
-                    dist, img, _ = detector.find_distance(img, hand1_landmarks, 1, 2, draw=True)
-                    action = "MOUSE_CLICK_LEFT" if dist < 30 else "MOUSE_MOVE"
-                elif fingers_up == [1, 1, 0, 0, 0]:
-                    dist, img, _ = detector.find_distance(img, hand1_landmarks, 0, 1, draw=True)
-                    if dist < 30:
-                        action = "MOUSE_CLICK_RIGHT"
-                elif fingers_up == [0, 1, 0, 0, 1]:
-                    dist, img, _ = detector.find_distance(img, hand1_landmarks, 1, 4, draw=True)
-                    action = "MOUSE_DRAG" if dist < 30 else "MOUSE_MOVE"
+                mouse_x, mouse_y = map_hand_to_screen(index_x, index_y, width, height)
+                action = resolve_mouse_action(fingers_up, detector, img, hand1_landmarks)
+                if action:
+                    emit(
+                        "agent_command",
+                        {"action": action, "x": mouse_x, "y": mouse_y},
+                        to=room,
+                    )
 
             elif current_mode == 1:
                 swipe = detector.get_swipe_direction()
@@ -179,12 +218,8 @@ def handle_video_frame(data):
                 elif swipe == "Left":
                     action = "MEDIA_PREV"
 
-            if action:
-                emit(
-                    "agent_command",
-                    {"action": action, "x": norm_x, "y": norm_y},
-                    to=room,
-                )
+            if action and current_mode != 0:
+                emit("agent_command", {"action": action}, to=room)
 
         _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 50])
         processed_base64 = base64.b64encode(buffer).decode("utf-8")

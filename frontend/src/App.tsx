@@ -86,7 +86,7 @@ const App: React.FC = () => {
   const sendVideoFrame = () => {
     if (
       waitingForFrameRef.current &&
-      performance.now() - frameSentAtRef.current < 2500
+      performance.now() - frameSentAtRef.current < 2000
     ) {
       return;
     }
@@ -228,7 +228,7 @@ const App: React.FC = () => {
               if (intervalId) clearInterval(intervalId);
               intervalId = setInterval(() => {
                 self.postMessage('tick');
-              }, 66);
+              }, 50);
             } else if (e.data === 'stop') {
               if (intervalId) {
                 clearInterval(intervalId);
