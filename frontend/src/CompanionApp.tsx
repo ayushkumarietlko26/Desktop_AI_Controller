@@ -6,6 +6,8 @@ import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
   GestureState,
+  MODE_NAMES,
+  MODE_COLORS,
   toPixelLandmarks,
   processGestures,
   readHandedness,
@@ -21,6 +23,7 @@ const INITIAL_MODE = Number(params.get('mode') || '0');
 const CompanionApp: React.FC = () => {
   const [fps, setFps] = useState(0);
   const [status, setStatus] = useState('Starting...');
+  const [activeMode, setActiveMode] = useState(INITIAL_MODE);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -36,6 +39,12 @@ const CompanionApp: React.FC = () => {
   const frameCountRef = useRef(0);
   const lastFpsRef = useRef(0);
   const backgroundSessionRef = useRef(new BackgroundSession());
+
+  const applyMode = useCallback((mode: number) => {
+    const clamped = Math.max(0, Math.min(3, mode));
+    activeModeRef.current = clamped;
+    setActiveMode(clamped);
+  }, []);
 
   const emitCommand = useCallback((action: string, x?: number, y?: number) => {
     if (!socketRef.current?.connected) return;
@@ -88,7 +97,7 @@ const CompanionApp: React.FC = () => {
               tip.extended
             )
           : null;
-      const { command } = processGestures(
+      const { command, modeChange } = processGestures(
         lm,
         handedness,
         activeModeRef.current,
@@ -97,6 +106,10 @@ const CompanionApp: React.FC = () => {
         TRACK_HEIGHT,
         pointer
       );
+      if (modeChange !== null) {
+        applyMode(modeChange);
+        socketRef.current?.emit('change_mode', { room: ROOM_ID, mode: modeChange });
+      }
       if (command) {
         const isClick =
           command.action.includes('CLICK') || command.action === 'MOUSE_DRAG';
@@ -111,7 +124,7 @@ const CompanionApp: React.FC = () => {
         }
       }
     }
-  }, [emitCommand]);
+  }, [applyMode, emitCommand]);
 
   const loop = useCallback(() => {
     if (!isRunningRef.current) return;
@@ -139,8 +152,11 @@ const CompanionApp: React.FC = () => {
       socket.emit('change_mode', { room: ROOM_ID, mode: activeModeRef.current });
       setStatus(`Connected · ${ROOM_ID}`);
     });
+    socket.on('mode_changed', (data: { mode: number }) => {
+      applyMode(data.mode);
+    });
     socketRef.current = socket;
-  }, []);
+  }, [applyMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -176,8 +192,11 @@ const CompanionApp: React.FC = () => {
       if (e.data?.type === 'init-stream' && e.data.stream) {
         await startCamera(e.data.stream as MediaStream);
         if (typeof e.data.mode === 'number') {
-          activeModeRef.current = e.data.mode;
+          applyMode(e.data.mode);
         }
+      }
+      if (e.data?.type === 'mode-update' && typeof e.data.mode === 'number') {
+        applyMode(e.data.mode);
       }
     };
     window.addEventListener('message', onMessage);
@@ -191,7 +210,12 @@ const CompanionApp: React.FC = () => {
       landmarkerRef.current?.close();
       window.removeEventListener('message', onMessage);
     };
-  }, [connectSocket, startCamera]);
+  }, [applyMode, connectSocket, startCamera]);
+
+  const modeColor = MODE_COLORS[activeMode] ?? '#0f0';
+  const modeName = MODE_NAMES[activeMode] ?? 'MODE';
+  const presentationHint =
+    activeMode === 1 ? ' · 1↑ prev · 2↑ next' : '';
 
   return (
     <div
@@ -210,11 +234,25 @@ const CompanionApp: React.FC = () => {
           padding: '4px 8px',
           fontSize: '10px',
           color: '#0f0',
-          background: 'rgba(0,0,0,0.8)',
+          background: 'rgba(0,0,0,0.85)',
           flexShrink: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '2px',
         }}
       >
-        Mini · {status} · {fps} fps
+        <span
+          style={{
+            fontWeight: 700,
+            color: modeColor,
+            fontSize: '11px',
+          }}
+        >
+          {modeName}
+        </span>
+        <span style={{ color: '#aaa' }}>
+          {status} · {fps} fps{presentationHint}
+        </span>
       </div>
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <canvas

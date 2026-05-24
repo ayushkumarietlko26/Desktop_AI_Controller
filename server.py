@@ -28,7 +28,7 @@ room_detectors = {}
 room_modes = {}
 mode_hold_times = {}
 last_media_playpause_time = {}
-presentation_prev_pattern = {}
+presentation_prev_count = {}
 last_presentation_slide_time = {}
 room_processing = {}
 room_client_tracking = {}
@@ -245,15 +245,16 @@ def handle_video_frame(data):
                     )
 
             elif current_mode == 1:
-                pattern = "".join(str(f) for f in fingers_up)
-                prev = presentation_prev_pattern.get(room, "")
-                presentation_prev_pattern[room] = pattern
+                # Thumb ignored — count index/middle/ring/pinky only
+                finger_count = sum(fingers_up[1:])
+                prev_count = presentation_prev_count.get(room, -1)
+                presentation_prev_count[room] = finger_count
                 now = time.time()
                 if now - last_presentation_slide_time.get(room, 0) >= PRESENTATION_COOLDOWN_SEC:
-                    if pattern == "01000" and prev != "01000":
+                    if finger_count == 1 and prev_count != 1:
                         action = "SWIPE_LEFT"
                         last_presentation_slide_time[room] = now
-                    elif pattern == "01100" and prev != "01100":
+                    elif finger_count == 2 and prev_count != 2:
                         action = "SWIPE_RIGHT"
                         last_presentation_slide_time[room] = now
 

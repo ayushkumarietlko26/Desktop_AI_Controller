@@ -87,7 +87,8 @@ type DocPip = {
 };
 
 let docPipWindow: Window | null = null;
-let docPipVideo: HTMLVideoElement | null = null;
+let docPipCanvas: HTMLCanvasElement | null = null;
+let docPipModeBar: HTMLDivElement | null = null;
 
 function getDocPip(): DocPip | undefined {
   return (window as unknown as { documentPictureInPicture?: DocPip })
@@ -97,6 +98,21 @@ function getDocPip(): DocPip | undefined {
 export function isPipActive(): boolean {
   if (docPipWindow && !docPipWindow.closed) return true;
   return Boolean(document.pictureInPictureElement);
+}
+
+export function getDocPipCanvas(): HTMLCanvasElement | null {
+  if (docPipWindow?.closed) {
+    docPipCanvas = null;
+    docPipModeBar = null;
+    docPipWindow = null;
+  }
+  return docPipCanvas;
+}
+
+export function setDocPipModeLabel(label: string, color: string): void {
+  if (!docPipModeBar) return;
+  docPipModeBar.textContent = label;
+  docPipModeBar.style.color = color;
 }
 
 export async function enterSmallPictureInPicture(
@@ -113,7 +129,7 @@ export async function enterSmallPictureInPicture(
       if (docPip.window && !docPip.window.closed) {
         await leavePictureInPicture();
       }
-      docPipWindow = await docPip.requestWindow({ width: 200, height: 150 });
+      docPipWindow = await docPip.requestWindow({ width: 240, height: 180 });
       const doc = docPipWindow.document;
       doc.body.style.margin = '0';
       doc.body.style.overflow = 'hidden';
@@ -121,9 +137,9 @@ export async function enterSmallPictureInPicture(
 
       const style = doc.createElement('style');
       style.textContent = `
-        video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+        canvas { width:100%; height:100%; object-fit:cover; display:block; }
         .bar { position:absolute; top:0; left:0; right:0; padding:4px 6px;
-          font:11px sans-serif; color:#0f0; background:rgba(0,0,0,0.55); }
+          font:11px sans-serif; color:#0f0; background:rgba(0,0,0,0.7); z-index:2; }
       `;
       doc.head.appendChild(style);
 
@@ -131,24 +147,24 @@ export async function enterSmallPictureInPicture(
       bar.className = 'bar';
       bar.textContent = 'Hand control active';
       doc.body.appendChild(bar);
+      docPipModeBar = bar;
 
-      docPipVideo = doc.createElement('video');
-      docPipVideo.muted = true;
-      docPipVideo.playsInline = true;
-      docPipVideo.autoplay = true;
-      docPipVideo.srcObject = stream;
-      doc.body.appendChild(docPipVideo);
-      await docPipVideo.play();
+      docPipCanvas = doc.createElement('canvas');
+      docPipCanvas.width = 480;
+      docPipCanvas.height = 360;
+      doc.body.appendChild(docPipCanvas);
 
       docPipWindow.addEventListener('pagehide', () => {
         docPipWindow = null;
-        docPipVideo = null;
+        docPipCanvas = null;
+        docPipModeBar = null;
       });
 
       return { ok: true };
     } catch (err) {
       docPipWindow = null;
-      docPipVideo = null;
+      docPipCanvas = null;
+      docPipModeBar = null;
       console.warn('Document PiP failed', err);
     }
   }
@@ -185,7 +201,8 @@ export async function leavePictureInPicture(): Promise<void> {
     /* ignore */
   }
   docPipWindow = null;
-  docPipVideo = null;
+  docPipCanvas = null;
+  docPipModeBar = null;
 
   try {
     if (document.pictureInPictureElement) {

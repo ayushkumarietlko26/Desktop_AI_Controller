@@ -16,33 +16,51 @@ export type AgentCommand = {
 
 export const PRESENTATION_COOLDOWN_MS = 700;
 
+export const MODE_NAMES = [
+  'MOUSE MODE',
+  'PRESENTATION MODE',
+  'MEDIA MODE',
+  'JARVIS MODE',
+] as const;
+
+export const MODE_COLORS = ['#00d2ff', '#ff8c00', '#00ffcc', '#eab308'] as const;
+
 export class GestureState {
   positionHistory: Array<[number, number]> = [];
   modeHoldStart: number | null = null;
   lastMediaPlayPause = 0;
   lastPresentationSlide = 0;
-  presentationPrevPattern = '';
+  presentationPrevCount = -1;
 }
 
-/** Presentation: 1 finger (index) = previous slide, 2 fingers (index+middle) = next */
+/** Count extended fingers excluding thumb (index/middle/ring/pinky only). */
+export function extendedFingerCount(fingers: number[]): number {
+  return fingers.slice(1).reduce((sum, up) => sum + up, 0);
+}
+
+/**
+ * Presentation (thumb ignored — works reliably on selfie cam):
+ * 1 finger up → previous slide, 2 fingers up → next slide.
+ * Fires on transition into the pose, not while holding.
+ */
 export function resolvePresentationAction(
   fingers: number[],
   state: GestureState
 ): AgentCommand | null {
-  const pattern = fingers.join('');
-  const prev = state.presentationPrevPattern;
-  state.presentationPrevPattern = pattern;
+  const count = extendedFingerCount(fingers);
+  const prev = state.presentationPrevCount;
+  state.presentationPrevCount = count;
 
   const now = Date.now();
   if (now - state.lastPresentationSlide < PRESENTATION_COOLDOWN_MS) {
     return null;
   }
 
-  if (pattern === '01000' && prev !== '01000') {
+  if (count === 1 && prev !== 1) {
     state.lastPresentationSlide = now;
     return { action: 'SWIPE_LEFT' };
   }
-  if (pattern === '01100' && prev !== '01100') {
+  if (count === 2 && prev !== 2) {
     state.lastPresentationSlide = now;
     return { action: 'SWIPE_RIGHT' };
   }

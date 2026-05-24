@@ -17,7 +17,7 @@ export function openCompanionWindow(config: CompanionConfig): Window | null {
   const w = window.open(
     url,
     'CloudControllerMini',
-    'width=220,height=170,left=60,top=60,resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no'
+    'width=260,height=200,left=60,top=60,resizable=yes,scrollbars=no,menubar=no,toolbar=no,location=no,status=no'
   );
 
   if (!w) {

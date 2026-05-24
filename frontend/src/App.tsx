@@ -15,12 +15,14 @@ import {
   Server,
   PictureInPicture,
 } from 'lucide-react';
-import { createHandLandmarker, drawHandPreview, detectHandsFromVideo } from './handTracker';
+import { createHandLandmarker, drawHandPreview } from './handTracker';
 import {
   BackgroundSession,
   enterSmallPictureInPicture,
+  getDocPipCanvas,
   isDocumentHidden,
   leavePictureInPicture,
+  setDocPipModeLabel,
   hiddenVideoStyle,
 } from './backgroundSession';
 import { openCompanionWindow } from './companionWindow';
@@ -28,6 +30,8 @@ import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
   GestureState,
+  MODE_NAMES,
+  MODE_COLORS,
   toPixelLandmarks,
   processGestures,
   readHandedness,
@@ -85,6 +89,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     activeModeRef.current = activeMode;
+    const name = MODE_NAMES[activeMode] ?? 'MODE';
+    const color = MODE_COLORS[activeMode] ?? '#0f0';
+    setDocPipModeLabel(name, color);
+    const mini = companionWindowRef.current;
+    if (mini && !mini.closed) {
+      mini.postMessage({ type: 'mode-update', mode: activeMode }, window.location.origin);
+    }
   }, [activeMode]);
 
   useEffect(() => {
@@ -170,15 +181,19 @@ const App: React.FC = () => {
     }
 
     const timestamp = performance.now();
-    const hidden = isDocumentHidden();
 
     let result;
-    if (hidden || !canvas) {
-      result = detectHandsFromVideo(video, landmarker, timestamp);
-    } else {
+    if (canvas) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       result = drawHandPreview(ctx, video, landmarker, timestamp);
+      const pipCanvas = getDocPipCanvas();
+      if (pipCanvas) {
+        const pipCtx = pipCanvas.getContext('2d');
+        pipCtx?.drawImage(canvas, 0, 0, pipCanvas.width, pipCanvas.height);
+      }
+    } else {
+      return;
     }
 
     frameCountRef.current += 1;
@@ -436,6 +451,12 @@ const App: React.FC = () => {
           videoRef.current
         );
         setPipActive(pip.ok);
+        if (pip.ok) {
+          setDocPipModeLabel(
+            MODE_NAMES[activeModeRef.current] ?? 'MODE',
+            MODE_COLORS[activeModeRef.current] ?? '#0f0'
+          );
+        }
       } else {
         stopBackgroundInterval();
         await leavePictureInPicture();
@@ -469,6 +490,10 @@ const App: React.FC = () => {
     const result = await enterSmallPictureInPicture(stream, video);
     if (result.ok) {
       setPipActive(true);
+      setDocPipModeLabel(
+        MODE_NAMES[activeModeRef.current] ?? 'MODE',
+        MODE_COLORS[activeModeRef.current] ?? '#0f0'
+      );
     } else {
       alert(
         result.message ||
@@ -570,8 +595,8 @@ const App: React.FC = () => {
       color: '#ff8c00',
       icon: <Presentation size={32} />,
       gestures: [
-        '1 finger (index): Previous slide',
-        '2 fingers (index + middle): Next slide',
+        '1 finger up (index): Previous slide',
+        '2 fingers up (peace sign): Next slide',
         'Three finger hold: Switch Mode',
       ],
     },
