@@ -30,9 +30,12 @@ mode_hold_times = {}
 last_media_playpause_time = {}
 room_processing = {}
 
-# Process at lower resolution on cloud to keep latency low on Render free tier
+# MediaPipe runs on smaller frames; preview is upscaled for clearer video
+DISPLAY_WIDTH = 480
+DISPLAY_HEIGHT = 360
 PROCESS_WIDTH = 320
 PROCESS_HEIGHT = 240
+OUTPUT_JPEG_QUALITY = 68
 
 # Smaller margin / sensitivity = hand travels less distance for full screen sweep
 MOUSE_MARGIN = 0.10
@@ -151,15 +154,18 @@ def handle_video_frame(data):
         if img is None:
             return
 
-        height, width, _ = img.shape
-        if width != PROCESS_WIDTH or height != PROCESS_HEIGHT:
-            img = cv2.resize(img, (PROCESS_WIDTH, PROCESS_HEIGHT), interpolation=cv2.INTER_AREA)
-            height, width = PROCESS_HEIGHT, PROCESS_WIDTH
+        display_img = cv2.resize(
+            img, (DISPLAY_WIDTH, DISPLAY_HEIGHT), interpolation=cv2.INTER_AREA
+        )
+        process_img = cv2.resize(
+            display_img, (PROCESS_WIDTH, PROCESS_HEIGHT), interpolation=cv2.INTER_AREA
+        )
+        height, width = PROCESS_HEIGHT, PROCESS_WIDTH
 
         detector = room_detectors[room]
 
-        detector.find_hands(img)
-        hand1_landmarks, hand1_type = detector.find_positions(img, hand_num=0)
+        detector.find_hands(process_img)
+        hand1_landmarks, hand1_type = detector.find_positions(process_img, hand_num=0)
 
         current_mode = room_modes.get(room, 0)
 
@@ -185,7 +191,7 @@ def handle_video_frame(data):
 
             if current_mode == 0:
                 mouse_x, mouse_y = map_hand_to_screen(index_x, index_y, width, height)
-                action = resolve_mouse_action(fingers_up, detector, img, hand1_landmarks)
+                action = resolve_mouse_action(fingers_up, detector, process_img, hand1_landmarks)
                 if action:
                     emit(
                         "agent_command",
@@ -221,7 +227,14 @@ def handle_video_frame(data):
             if action and current_mode != 0:
                 emit("agent_command", {"action": action}, to=room)
 
-        _, buffer = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 50])
+        preview = cv2.resize(
+            process_img,
+            (DISPLAY_WIDTH, DISPLAY_HEIGHT),
+            interpolation=cv2.INTER_CUBIC,
+        )
+        _, buffer = cv2.imencode(
+            ".jpg", preview, [cv2.IMWRITE_JPEG_QUALITY, OUTPUT_JPEG_QUALITY]
+        )
         processed_base64 = base64.b64encode(buffer).decode("utf-8")
         emit(
             "processed_frame",

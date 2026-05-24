@@ -17,9 +17,10 @@ import {
 const DEFAULT_SERVER_URL =
   import.meta.env.VITE_SERVER_URL || 'https://desktop-ai-controller-16.onrender.com';
 
-const STREAM_WIDTH = 320;
-const STREAM_HEIGHT = 240;
-const STREAM_JPEG_QUALITY = 0.45;
+const STREAM_WIDTH = 480;
+const STREAM_HEIGHT = 360;
+const STREAM_JPEG_QUALITY = 0.58;
+const STREAM_TICK_MS = 58;
 
 const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState(0);
@@ -98,8 +99,11 @@ const App: React.FC = () => {
       return;
     }
 
-    const ctx = canvasRef.current.getContext('2d');
+    const ctx = canvasRef.current.getContext('2d', { alpha: false });
     if (!ctx) return;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
 
     ctx.drawImage(videoRef.current, 0, 0, STREAM_WIDTH, STREAM_HEIGHT);
     const dataUrl = canvasRef.current.toDataURL('image/jpeg', STREAM_JPEG_QUALITY);
@@ -206,7 +210,7 @@ const App: React.FC = () => {
           video: {
             width: { ideal: STREAM_WIDTH },
             height: { ideal: STREAM_HEIGHT },
-            frameRate: { ideal: 15, max: 20 },
+            frameRate: { ideal: 18, max: 24 },
             facingMode: 'user',
           },
           audio: false,
@@ -228,7 +232,7 @@ const App: React.FC = () => {
               if (intervalId) clearInterval(intervalId);
               intervalId = setInterval(() => {
                 self.postMessage('tick');
-              }, 50);
+              }, ${STREAM_TICK_MS});
             } else if (e.data === 'stop') {
               if (intervalId) {
                 clearInterval(intervalId);
@@ -362,8 +366,8 @@ const App: React.FC = () => {
               {connectionError
                 ? connectionError
                 : isStreaming
-                  ? `Streaming ~${fps} fps (cloud-processed)`
-                  : 'Connect, then start the camera. Frames are sent only after the server finishes each one to avoid lag.'}
+                  ? `Streaming ~${fps} fps · 480p balanced`
+                  : 'Connect, then start the camera. Video uses 480p with smart compression to stay smooth.'}
             </p>
           </div>
 
@@ -407,7 +411,17 @@ const App: React.FC = () => {
                   <img 
                     src={processedImage} 
                     alt="Processed feed" 
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)', position: 'absolute', top: 0, left: 0, zIndex: 2 }} 
+                    style={{ 
+                      width: '100%', 
+                      height: '100%', 
+                      objectFit: 'cover', 
+                      transform: 'scaleX(-1)', 
+                      position: 'absolute', 
+                      top: 0, 
+                      left: 0, 
+                      zIndex: 2,
+                      imageRendering: 'auto',
+                    }} 
                   />
                 )}
 
@@ -421,7 +435,7 @@ const App: React.FC = () => {
                     height: '100%', 
                     objectFit: 'cover', 
                     transform: 'scaleX(-1)', 
-                    display: isStreaming ? 'block' : 'none',
+                    display: isStreaming && !processedImage ? 'block' : 'none',
                     position: 'absolute',
                     top: 0,
                     left: 0,
