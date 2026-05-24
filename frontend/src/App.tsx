@@ -18,20 +18,14 @@ import {
 import { createHandLandmarker, drawHandPreview } from './handTracker';
 import {
   BackgroundSession,
-  enterSmallPictureInPicture,
-  getDocPipCanvas,
   isDocumentHidden,
-  leavePictureInPicture,
-  setDocPipModeLabel,
   hiddenVideoStyle,
 } from './backgroundSession';
-import { openCompanionWindow } from './companionWindow';
+import { openCompanionWindow, openPopoutWindow } from './companionWindow';
 import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
   GestureState,
-  MODE_NAMES,
-  MODE_COLORS,
   toPixelLandmarks,
   processGestures,
   readHandedness,
@@ -81,6 +75,7 @@ const App: React.FC = () => {
   const bgIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const backgroundSessionRef = useRef(new BackgroundSession());
   const companionWindowRef = useRef<Window | null>(null);
+  const popoutWindowRef = useRef<Window | null>(null);
   const miniWindowActiveRef = useRef(false);
 
   useEffect(() => {
@@ -89,12 +84,13 @@ const App: React.FC = () => {
 
   useEffect(() => {
     activeModeRef.current = activeMode;
-    const name = MODE_NAMES[activeMode] ?? 'MODE';
-    const color = MODE_COLORS[activeMode] ?? '#0f0';
-    setDocPipModeLabel(name, color);
     const mini = companionWindowRef.current;
     if (mini && !mini.closed) {
       mini.postMessage({ type: 'mode-update', mode: activeMode }, window.location.origin);
+    }
+    const pop = popoutWindowRef.current;
+    if (pop && !pop.closed) {
+      pop.postMessage({ type: 'mode-update', mode: activeMode }, window.location.origin);
     }
   }, [activeMode]);
 
@@ -187,11 +183,6 @@ const App: React.FC = () => {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       result = drawHandPreview(ctx, video, landmarker, timestamp);
-      const pipCanvas = getDocPipCanvas();
-      if (pipCanvas) {
-        const pipCtx = pipCanvas.getContext('2d');
-        pipCtx?.drawImage(canvas, 0, 0, pipCanvas.width, pipCanvas.height);
-      }
     } else {
       return;
     }
@@ -363,12 +354,15 @@ const App: React.FC = () => {
     isStreamingRef.current = false;
     stopTrackingScheduler();
     void backgroundSessionRef.current.stop();
-    void leavePictureInPicture();
     setPipActive(false);
     if (companionWindowRef.current && !companionWindowRef.current.closed) {
       companionWindowRef.current.close();
     }
     companionWindowRef.current = null;
+    if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+      popoutWindowRef.current.close();
+    }
+    popoutWindowRef.current = null;
     miniWindowActiveRef.current = false;
     setMiniWindowActive(false);
     if (videoRef.current?.srcObject) {
@@ -445,61 +439,68 @@ const App: React.FC = () => {
         }
         await videoRef.current?.play().catch(() => {});
         startBackgroundInterval();
-        const stream = videoRef.current?.srcObject as MediaStream | null;
-        const pip = await enterSmallPictureInPicture(
-          stream,
-          videoRef.current
-        );
-        setPipActive(pip.ok);
-        if (pip.ok) {
-          setDocPipModeLabel(
-            MODE_NAMES[activeModeRef.current] ?? 'MODE',
-            MODE_COLORS[activeModeRef.current] ?? '#0f0'
-          );
-        }
       } else {
         stopBackgroundInterval();
-        await leavePictureInPicture();
-        setPipActive(false);
         scheduleVisibleLoop();
       }
     };
 
-    const onPipLeave = () => setPipActive(false);
-
     document.addEventListener('visibilitychange', onVisibility);
-    videoRef.current?.addEventListener('leavepictureinpicture', onPipLeave);
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
-      videoRef.current?.removeEventListener('leavepictureinpicture', onPipLeave);
     };
   }, [scheduleVisibleLoop, startBackgroundInterval, stopBackgroundInterval]);
 
   const togglePictureInPicture = async () => {
-    const video = videoRef.current;
-    const stream = video?.srcObject as MediaStream | null;
-    if (!isStreaming || !stream) {
+    if (!isStreaming || !videoRef.current?.srcObject) {
       alert('Start the camera first.');
       return;
     }
-    if (pipActive) {
-      await leavePictureInPicture();
-      setPipActive(false);
+    const existing = popoutWindowRef.current;
+    if (existing && !existing.closed) {
+      existing.focus();
       return;
     }
-    const result = await enterSmallPictureInPicture(stream, video);
-    if (result.ok) {
-      setPipActive(true);
-      setDocPipModeLabel(
-        MODE_NAMES[activeModeRef.current] ?? 'MODE',
-        MODE_COLORS[activeModeRef.current] ?? '#0f0'
-      );
-    } else {
+
+    const w = openPopoutWindow({
+      roomId: roomIdRef.current,
+      serverUrl,
+      mode: activeModeRef.current,
+    });
+    if (!w) {
       alert(
-        result.message ||
-          'Small pop-out failed. Use Chrome/Edge, or click Mini Window instead.'
+        'Pop-up was blocked. In your browser address bar, allow pop-ups for this site, then try again.'
       );
+      return;
     }
+
+    popoutWindowRef.current = w;
+
+    const onPopoutMessage = (e: MessageEvent) => {
+      if (e.source !== w || e.data?.type !== 'companion-ready') return;
+      w.postMessage(
+        {
+          type: 'init-stream',
+          stream: videoRef.current?.srcObject,
+          mode: activeModeRef.current,
+        },
+        window.location.origin
+      );
+      stopTrackingScheduler();
+      setPipActive(true);
+    };
+    window.addEventListener('message', onPopoutMessage);
+
+    const closeCheck = window.setInterval(() => {
+      if (!w.closed) return;
+      window.clearInterval(closeCheck);
+      window.removeEventListener('message', onPopoutMessage);
+      popoutWindowRef.current = null;
+      setPipActive(false);
+      if (isStreamingRef.current && !miniWindowActiveRef.current) {
+        startTrackingScheduler();
+      }
+    }, 400);
   };
 
   const openMiniWindow = () => {
@@ -804,7 +805,7 @@ const App: React.FC = () => {
               type="button"
               onClick={togglePictureInPicture}
               disabled={!isStreaming}
-              title="Small floating camera (Chrome/Edge)"
+              title="Canvas pop-out with landmarks + mode"
               style={{
                 border: '1px solid #888',
                 color: pipActive ? '#000' : '#ccc',
@@ -819,7 +820,7 @@ const App: React.FC = () => {
                 fontSize: '13px',
               }}
             >
-              Small Pop-out
+              {pipActive ? 'Pop-out On' : 'Small Pop-out'}
             </button>
           </div>
         </motion.div>

@@ -31,6 +31,19 @@ export class GestureState {
   lastMediaPlayPause = 0;
   lastPresentationSlide = 0;
   presentationPrevCount = -1;
+  presentationHoldCount = -1;
+  presentationHoldStart: number | null = null;
+  presentationHoldFired = false;
+}
+
+export const PRESENTATION_HOLD_MS = 400;
+
+export function resetPresentationState(state: GestureState): void {
+  state.presentationPrevCount = -1;
+  state.presentationHoldCount = -1;
+  state.presentationHoldStart = null;
+  state.presentationHoldFired = false;
+  state.lastPresentationSlide = 0;
 }
 
 /** Count extended fingers excluding thumb (index/middle/ring/pinky only). */
@@ -39,31 +52,61 @@ export function extendedFingerCount(fingers: number[]): number {
 }
 
 /**
- * Presentation (thumb ignored — works reliably on selfie cam):
- * 1 finger up → previous slide, 2 fingers up → next slide.
- * Fires on transition into the pose, not while holding.
+ * Presentation (thumb ignored):
+ * - Hold 1 finger ~400ms → previous slide
+ * - Hold 2 fingers (peace sign) ~400ms → next slide
+ * - Open palm (4+ fingers) quick → next slide
+ * - Closed fist (0 fingers) quick → previous slide
  */
 export function resolvePresentationAction(
   fingers: number[],
   state: GestureState
 ): AgentCommand | null {
   const count = extendedFingerCount(fingers);
-  const prev = state.presentationPrevCount;
-  state.presentationPrevCount = count;
-
   const now = Date.now();
+
   if (now - state.lastPresentationSlide < PRESENTATION_COOLDOWN_MS) {
+    state.presentationPrevCount = count;
     return null;
   }
 
-  if (count === 1 && prev !== 1) {
+  const prev = state.presentationPrevCount;
+  state.presentationPrevCount = count;
+
+  if (count >= 4 && prev < 4) {
     state.lastPresentationSlide = now;
-    return { action: 'SWIPE_LEFT' };
-  }
-  if (count === 2 && prev !== 2) {
-    state.lastPresentationSlide = now;
+    resetPresentationState(state);
     return { action: 'SWIPE_RIGHT' };
   }
+  if (count === 0 && prev > 0) {
+    state.lastPresentationSlide = now;
+    resetPresentationState(state);
+    return { action: 'SWIPE_LEFT' };
+  }
+
+  if (count === 1 || count === 2) {
+    if (state.presentationHoldCount !== count) {
+      state.presentationHoldCount = count;
+      state.presentationHoldStart = now;
+      state.presentationHoldFired = false;
+    } else if (
+      state.presentationHoldStart !== null &&
+      !state.presentationHoldFired &&
+      now - state.presentationHoldStart >= PRESENTATION_HOLD_MS
+    ) {
+      state.presentationHoldFired = true;
+      state.lastPresentationSlide = now;
+      const action = count === 1 ? 'SWIPE_LEFT' : 'SWIPE_RIGHT';
+      state.presentationHoldStart = null;
+      state.presentationHoldCount = -1;
+      return { action };
+    }
+  } else {
+    state.presentationHoldCount = -1;
+    state.presentationHoldStart = null;
+    state.presentationHoldFired = false;
+  }
+
   return null;
 }
 
