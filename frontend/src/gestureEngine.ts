@@ -14,10 +14,39 @@ export type AgentCommand = {
   y?: number;
 };
 
+export const PRESENTATION_COOLDOWN_MS = 700;
+
 export class GestureState {
   positionHistory: Array<[number, number]> = [];
   modeHoldStart: number | null = null;
   lastMediaPlayPause = 0;
+  lastPresentationSlide = 0;
+  presentationPrevPattern = '';
+}
+
+/** Presentation: 1 finger (index) = previous slide, 2 fingers (index+middle) = next */
+export function resolvePresentationAction(
+  fingers: number[],
+  state: GestureState
+): AgentCommand | null {
+  const pattern = fingers.join('');
+  const prev = state.presentationPrevPattern;
+  state.presentationPrevPattern = pattern;
+
+  const now = Date.now();
+  if (now - state.lastPresentationSlide < PRESENTATION_COOLDOWN_MS) {
+    return null;
+  }
+
+  if (pattern === '01000' && prev !== '01000') {
+    state.lastPresentationSlide = now;
+    return { action: 'SWIPE_LEFT' };
+  }
+  if (pattern === '01100' && prev !== '01100') {
+    state.lastPresentationSlide = now;
+    return { action: 'SWIPE_RIGHT' };
+  }
+  return null;
 }
 
 export function toPixelLandmarks(
@@ -208,9 +237,7 @@ export function processGestures(
     const action = resolveMouseAction(fingers, lm, width);
     command = { action, x, y };
   } else if (currentMode === 1) {
-    const swipe = getSwipeDirection(state, width);
-    if (swipe === 'Right') command = { action: 'SWIPE_RIGHT' };
-    else if (swipe === 'Left') command = { action: 'SWIPE_LEFT' };
+    command = resolvePresentationAction(fingers, state);
   } else if (currentMode === 2) {
     const swipe = getSwipeDirection(state, width);
     if (fingers.join('') === '11111') {

@@ -28,8 +28,12 @@ room_detectors = {}
 room_modes = {}
 mode_hold_times = {}
 last_media_playpause_time = {}
+presentation_prev_pattern = {}
+last_presentation_slide_time = {}
 room_processing = {}
 room_client_tracking = {}
+
+PRESENTATION_COOLDOWN_SEC = 0.7
 
 # MediaPipe runs on smaller frames; preview is upscaled for clearer video
 DISPLAY_WIDTH = 480
@@ -241,11 +245,17 @@ def handle_video_frame(data):
                     )
 
             elif current_mode == 1:
-                swipe = detector.get_swipe_direction()
-                if swipe == "Right":
-                    action = "SWIPE_RIGHT"
-                elif swipe == "Left":
-                    action = "SWIPE_LEFT"
+                pattern = "".join(str(f) for f in fingers_up)
+                prev = presentation_prev_pattern.get(room, "")
+                presentation_prev_pattern[room] = pattern
+                now = time.time()
+                if now - last_presentation_slide_time.get(room, 0) >= PRESENTATION_COOLDOWN_SEC:
+                    if pattern == "01000" and prev != "01000":
+                        action = "SWIPE_LEFT"
+                        last_presentation_slide_time[room] = now
+                    elif pattern == "01100" and prev != "01100":
+                        action = "SWIPE_RIGHT"
+                        last_presentation_slide_time[room] = now
 
             elif current_mode == 2:
                 swipe = detector.get_swipe_direction()

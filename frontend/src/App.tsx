@@ -570,9 +570,8 @@ const App: React.FC = () => {
       color: '#ff8c00',
       icon: <Presentation size={32} />,
       gestures: [
-        'Index finger: Laser Pointer',
-        'Swipe Left: Next Slide',
-        'Swipe Right: Previous Slide',
+        '1 finger (index): Previous slide',
+        '2 fingers (index + middle): Next slide',
         'Three finger hold: Switch Mode',
       ],
     },

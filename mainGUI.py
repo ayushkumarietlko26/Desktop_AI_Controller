@@ -69,6 +69,7 @@ class VideoFeedWindowWorker(QThread):
         self.mode_colors = [(250, 0, 0), (0, 165, 255), (255, 255, 0), (0, 255, 255)] # Blue, Orange, Yellow, Cyan (BGR)
         self.mode_change_start_time = 0
         self.last_swipe_time = 0
+        self.presentation_prev_fingers = None
 
         try:
             self.jarvis = JarvisAssistant()
@@ -296,15 +297,19 @@ class VideoFeedWindowWorker(QThread):
                         self.mouse_down = False
 
         elif current_mode == 1:  # Presentation Mode
-            # Implement presentation control logic
-            cv2.circle(img, (index_x, index_y), 15, (0, 255, 255), cv2.FILLED) # Laser pointer
-            swipe = detector.get_swipe_direction()
-            if swipe == 'Right':
-                pyautogui.press('right') # Next slide
-                time.sleep(0.5) # Debounce
-            elif swipe == 'Left':
-                pyautogui.press('left') # Previous slide
-                time.sleep(0.5) # Debounce
+            cv2.circle(img, (index_x, index_y), 15, (0, 255, 255), cv2.FILLED)
+            prev = self.presentation_prev_fingers
+            self.presentation_prev_fingers = list(fingers_up)
+            now = time.time()
+            if now - self.last_swipe_time >= 0.7:
+                if fingers_up == [0, 1, 0, 0, 0] and prev != [0, 1, 0, 0, 0]:
+                    pyautogui.press('left')
+                    self.last_swipe_time = now
+                    time.sleep(0.35)
+                elif fingers_up == [0, 1, 1, 0, 0] and prev != [0, 1, 1, 0, 0]:
+                    pyautogui.press('right')
+                    self.last_swipe_time = now
+                    time.sleep(0.35)
 
         elif current_mode == 2:  # Media Mode
             # Implement media control logic
