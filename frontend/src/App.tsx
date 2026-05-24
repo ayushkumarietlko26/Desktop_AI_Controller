@@ -13,8 +13,15 @@ import {
   Video,
   Download,
   Server,
+  PictureInPicture,
 } from 'lucide-react';
-import { createHandLandmarker, drawHandPreview } from './handTracker';
+import { createHandLandmarker, drawHandPreview, detectHandsFromVideo } from './handTracker';
+import {
+  BackgroundSession,
+  enterPictureInPicture,
+  isDocumentHidden,
+  leavePictureInPicture,
+} from './backgroundSession';
 import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
@@ -44,6 +51,8 @@ const App: React.FC = () => {
   const [fps, setFps] = useState(0);
   const [cmdCount, setCmdCount] = useState(0);
   const [agentPaired, setAgentPaired] = useState(false);
+  const [runningInBackground, setRunningInBackground] = useState(false);
+  const [pipActive, setPipActive] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -61,6 +70,9 @@ const App: React.FC = () => {
   const lastFrameTimeRef = useRef(0);
   const frameCountRef = useRef(0);
   const lastClickActionRef = useRef('');
+  const isStreamingRef = useRef(false);
+  const bgIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const backgroundSessionRef = useRef(new BackgroundSession());
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -143,24 +155,26 @@ const App: React.FC = () => {
     setCmdCount((c) => c + 1);
   }, []);
 
-  const trackingLoop = useCallback(() => {
+  const runTrackingFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = previewRef.current;
     const landmarker = landmarkerRef.current;
 
-    if (!video || !canvas || !landmarker || video.readyState < 2) {
-      rafRef.current = requestAnimationFrame(trackingLoop);
-      return;
-    }
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      rafRef.current = requestAnimationFrame(trackingLoop);
+    if (!video || !landmarker || video.readyState < 2) {
       return;
     }
 
     const timestamp = performance.now();
-    const result = drawHandPreview(ctx, video, landmarker, timestamp);
+    const hidden = isDocumentHidden();
+
+    let result;
+    if (hidden || !canvas) {
+      result = detectHandsFromVideo(video, landmarker, timestamp);
+    } else {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      result = drawHandPreview(ctx, video, landmarker, timestamp);
+    }
 
     frameCountRef.current += 1;
     const now = performance.now();
@@ -225,9 +239,50 @@ const App: React.FC = () => {
         emitCommand('MOUSE_MOVE', coast.x, coast.y);
       }
     }
-
-    rafRef.current = requestAnimationFrame(trackingLoop);
   }, [emitCommand]);
+
+  const scheduleVisibleLoop = useCallback(() => {
+    if (!isStreamingRef.current || isDocumentHidden()) return;
+    rafRef.current = requestAnimationFrame(() => {
+      runTrackingFrame();
+      scheduleVisibleLoop();
+    });
+  }, [runTrackingFrame]);
+
+  const stopBackgroundInterval = useCallback(() => {
+    if (bgIntervalRef.current !== null) {
+      clearInterval(bgIntervalRef.current);
+      bgIntervalRef.current = null;
+    }
+    setRunningInBackground(false);
+  }, []);
+
+  const startBackgroundInterval = useCallback(() => {
+    if (bgIntervalRef.current !== null) return;
+    setRunningInBackground(true);
+    bgIntervalRef.current = setInterval(() => {
+      if (!isStreamingRef.current) return;
+      void videoRef.current?.play().catch(() => {});
+      runTrackingFrame();
+    }, 33);
+  }, [runTrackingFrame]);
+
+  const startTrackingScheduler = useCallback(() => {
+    if (isDocumentHidden()) {
+      startBackgroundInterval();
+    } else {
+      stopBackgroundInterval();
+      scheduleVisibleLoop();
+    }
+  }, [scheduleVisibleLoop, startBackgroundInterval, stopBackgroundInterval]);
+
+  const stopTrackingScheduler = useCallback(() => {
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    stopBackgroundInterval();
+  }, [stopBackgroundInterval]);
 
   const connectToServer = () => {
     if (socketRef.current) socketRef.current.disconnect();
@@ -285,10 +340,11 @@ const App: React.FC = () => {
   };
 
   const stopStreaming = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    isStreamingRef.current = false;
+    stopTrackingScheduler();
+    void backgroundSessionRef.current.stop();
+    void leavePictureInPicture();
+    setPipActive(false);
     if (videoRef.current?.srcObject) {
       const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
       tracks.forEach((t) => t.stop());
@@ -299,7 +355,8 @@ const App: React.FC = () => {
     lastEmitRef.current = { x: 0.5, y: 0.5, t: 0 };
     setIsStreaming(false);
     setFps(0);
-  }, []);
+    setRunningInBackground(false);
+  }, [stopTrackingScheduler]);
 
   const toggleStreaming = async () => {
     if (isStreaming) {
@@ -322,8 +379,11 @@ const App: React.FC = () => {
       });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('disablePictureInPicture', 'false');
         await videoRef.current.play();
       }
+      isStreamingRef.current = true;
+      await backgroundSessionRef.current.start();
       setIsStreaming(true);
       setCmdCount(0);
       const room = roomIdRef.current.trim().toUpperCase();
@@ -335,7 +395,7 @@ const App: React.FC = () => {
       });
       lastFrameTimeRef.current = performance.now();
       frameCountRef.current = 0;
-      rafRef.current = requestAnimationFrame(trackingLoop);
+      startTrackingScheduler();
     } catch (err) {
       alert('Could not access webcam.');
       console.error(err);
@@ -348,6 +408,49 @@ const App: React.FC = () => {
       socketRef.current?.disconnect();
     };
   }, [stopStreaming]);
+
+  useEffect(() => {
+    const onVisibility = async () => {
+      if (!isStreamingRef.current) return;
+
+      if (document.visibilityState === 'hidden') {
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        await videoRef.current?.play().catch(() => {});
+        startBackgroundInterval();
+        const pip = await enterPictureInPicture(videoRef.current);
+        setPipActive(pip);
+      } else {
+        stopBackgroundInterval();
+        await leavePictureInPicture();
+        setPipActive(false);
+        scheduleVisibleLoop();
+      }
+    };
+
+    const onPipLeave = () => setPipActive(false);
+
+    document.addEventListener('visibilitychange', onVisibility);
+    videoRef.current?.addEventListener('leavepictureinpicture', onPipLeave);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      videoRef.current?.removeEventListener('leavepictureinpicture', onPipLeave);
+    };
+  }, [scheduleVisibleLoop, startBackgroundInterval, stopBackgroundInterval]);
+
+  const togglePictureInPicture = async () => {
+    const video = videoRef.current;
+    if (!video || !isStreaming) return;
+    if (document.pictureInPictureElement === video) {
+      await leavePictureInPicture();
+      setPipActive(false);
+    } else {
+      const ok = await enterPictureInPicture(video);
+      setPipActive(ok);
+    }
+  };
 
   const toggleJarvis = () => {
     if (!recognitionRef.current) {
@@ -429,10 +532,12 @@ const App: React.FC = () => {
     : !trackerReady
       ? 'Loading MediaPipe...'
       : isStreaming
-        ? agentPaired
-          ? `Tracking ${fps} fps · ${cmdCount} commands sent · extend index finger to move mouse`
-          : `Tracking ${fps} fps · ${cmdCount} commands sent · start local_agent.py on your PC (Room: ${roomId})`
-        : 'Connect, then start camera. Run local_agent.py on your PC with the same Room ID.';
+        ? runningInBackground || pipActive
+          ? `Background mode · ${fps} fps · ${cmdCount} cmds · hand control active`
+          : agentPaired
+            ? `Tracking ${fps} fps · ${cmdCount} commands · extend index finger to move`
+            : `Tracking ${fps} fps · start local_agent.py (Room: ${roomId})`
+        : 'Connect & start camera. Minimize OK — auto pop-out camera keeps control running.';
 
   return (
     <div className="app-container">
@@ -570,6 +675,27 @@ const App: React.FC = () => {
             >
               <Mic size={18} />{' '}
               {jarvisActive ? 'Stop Listening' : 'Start Voice Control'}
+            </button>
+            <button
+              type="button"
+              onClick={togglePictureInPicture}
+              disabled={!isStreaming}
+              title="Pop camera out so control works when the browser is minimized"
+              style={{
+                border: '1px solid #888',
+                color: pipActive ? '#000' : '#ccc',
+                backgroundColor: pipActive ? '#00ffcc' : 'transparent',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                cursor: isStreaming ? 'pointer' : 'not-allowed',
+                opacity: isStreaming ? 1 : 0.45,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              <PictureInPicture size={18} />
+              {pipActive ? 'Pop-out On' : 'Pop-out Camera'}
             </button>
           </div>
         </motion.div>

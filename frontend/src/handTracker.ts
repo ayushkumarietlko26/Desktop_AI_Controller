@@ -70,3 +70,12 @@ export function drawHandPreview(
 
   return result;
 }
+
+/** Detection without canvas draw — used when tab is hidden/minimized */
+export function detectHandsFromVideo(
+  video: HTMLVideoElement,
+  landmarker: HandLandmarker,
+  timestamp: number
+) {
+  return landmarker.detectForVideo(video, timestamp);
+}
