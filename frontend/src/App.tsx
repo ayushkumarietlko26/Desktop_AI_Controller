@@ -52,8 +52,9 @@ const App: React.FC = () => {
   const landmarkerRef = useRef<HandLandmarker | null>(null);
   const gestureStateRef = useRef(new GestureState());
   const smoothPointerRef = useRef(new SmoothPointer());
-  const lastEmitRef = useRef({ x: 0.5, y: 0.5 });
-  const EMIT_DEADZONE = 0.005;
+  const lastEmitRef = useRef({ x: 0.5, y: 0.5, t: 0 });
+  const MOVE_EMIT_MIN_DIST = 0.002;
+  const MOVE_EMIT_MAX_MS = 45;
   const rafRef = useRef<number | null>(null);
   const roomIdRef = useRef(roomId);
   const activeModeRef = useRef(activeMode);
@@ -121,12 +122,15 @@ const App: React.FC = () => {
     if (!socketRef.current?.connected) return;
 
     if (action === 'MOUSE_MOVE' && x !== undefined && y !== undefined) {
+      const now = performance.now();
       const dx = x - lastEmitRef.current.x;
       const dy = y - lastEmitRef.current.y;
-      if (Math.hypot(dx, dy) < EMIT_DEADZONE) {
+      const dist = Math.hypot(dx, dy);
+      const elapsed = now - lastEmitRef.current.t;
+      if (dist < MOVE_EMIT_MIN_DIST && elapsed < MOVE_EMIT_MAX_MS) {
         return;
       }
-      lastEmitRef.current = { x, y };
+      lastEmitRef.current = { x, y, t: now };
     }
 
     const payload: Record<string, unknown> = {
@@ -292,7 +296,7 @@ const App: React.FC = () => {
     }
     gestureStateRef.current = new GestureState();
     smoothPointerRef.current.reset();
-    lastEmitRef.current = { x: 0.5, y: 0.5 };
+    lastEmitRef.current = { x: 0.5, y: 0.5, t: 0 };
     setIsStreaming(false);
     setFps(0);
   }, []);

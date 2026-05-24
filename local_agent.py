@@ -40,10 +40,11 @@ if IS_WINDOWS:
 
 # Smooth cursor — only takes over when remote hand commands are active
 MOUSE_TICK_HZ = 120
-MOUSE_LERP = 0.36
-TARGET_BLEND = 0.45
-DEAD_ZONE_PX = 4
-IDLE_RELEASE_SEC = 2.0
+MOUSE_LERP = 0.48
+TARGET_BLEND = 0.62
+DEAD_ZONE_PX = 2
+IDLE_RELEASE_SEC = 4.0
+MOVE_STEP = 0.55
 
 mouse_lock = threading.Lock()
 target_x, target_y = 0.0, 0.0
@@ -102,7 +103,7 @@ def snap_cursor_to_target():
         set_cursor(cursor_x, cursor_y)
 
 
-def update_mouse_target(norm_x, norm_y):
+def update_mouse_target(norm_x, norm_y, *, is_move=False):
     global target_x, target_y, target_updated_at, last_command_at
     activate_control()
     new_x = max(0, min(SCREEN_W - 1, norm_x * SCREEN_W))
@@ -110,15 +111,28 @@ def update_mouse_target(norm_x, norm_y):
 
     with mouse_lock:
         if (
-            abs(new_x - target_x) < DEAD_ZONE_PX
+            not is_move
+            and abs(new_x - target_x) < DEAD_ZONE_PX
             and abs(new_y - target_y) < DEAD_ZONE_PX
         ):
             last_command_at = time.time()
             return
-        target_x += (new_x - target_x) * TARGET_BLEND
-        target_y += (new_y - target_y) * TARGET_BLEND
+        blend = TARGET_BLEND if is_move else TARGET_BLEND * 0.7
+        target_x += (new_x - target_x) * blend
+        target_y += (new_y - target_y) * blend
         target_updated_at = time.time()
         last_command_at = time.time()
+
+
+def apply_move_step():
+    """Immediate cursor step on each MOUSE_MOVE (clicks already snap)."""
+    global cursor_x, cursor_y
+    with mouse_lock:
+        cursor_x += (target_x - cursor_x) * MOVE_STEP
+        cursor_y += (target_y - cursor_y) * MOVE_STEP
+        cx, cy = cursor_x, cursor_y
+    if control_active:
+        set_cursor(cx, cy)
 
 
 def mouse_interpolator():
@@ -211,11 +225,13 @@ def on_agent_command(data):
     if action in ["MOUSE_MOVE", "MOUSE_CLICK_LEFT", "MOUSE_CLICK_RIGHT", "MOUSE_DRAG"]:
         norm_x = data.get("x", 0.5)
         norm_y = data.get("y", 0.5)
-        update_mouse_target(norm_x, norm_y)
+        is_move = action == "MOUSE_MOVE"
+        update_mouse_target(norm_x, norm_y, is_move=is_move)
 
         if action == "MOUSE_MOVE":
+            apply_move_step()
             move_log_counter += 1
-            if move_log_counter % 40 == 0:
+            if move_log_counter % 60 == 0:
                 print(f"[CMD] MOUSE_MOVE ({norm_x:.2f}, {norm_y:.2f})")
             if mouse_down:
                 pyautogui.mouseUp()

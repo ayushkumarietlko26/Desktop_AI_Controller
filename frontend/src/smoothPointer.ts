@@ -13,8 +13,8 @@ export class SmoothPointer {
   private readonly history: Array<{ x: number; y: number }> = [];
   private readonly historyLen = 5;
   private readonly coastMs = 150;
-  private readonly deadZone = 0.007;
-  private readonly stillSpeed = 0.012;
+  private readonly deadZone = 0.003;
+  private readonly stillSpeed = 0.008;
 
   update(
     indexX: number,
@@ -51,7 +51,7 @@ export class SmoothPointer {
       const dist = Math.hypot(dx, dy);
 
       if (dist < this.deadZone) {
-        return { x: this.normX, y: this.normY };
+        return { x: clamp01(this.normX), y: clamp01(this.normY) };
       }
 
       const speed =
@@ -64,7 +64,7 @@ export class SmoothPointer {
             )
           : dist;
 
-      const alpha = speed < this.stillSpeed ? 0.14 : 0.38;
+      const alpha = speed < this.stillSpeed ? 0.22 : 0.52;
       this.normX += dx * alpha;
       this.normY += dy * alpha;
     }
@@ -114,6 +114,6 @@ export function indexTipPixels(
   const pip = landmarks[6];
   const x = tip.x * width;
   const y = tip.y * height;
-  const extended = y < pip.y * height - 6;
+  const extended = y < pip.y * height - 4;
   return { x, y, extended };
 }

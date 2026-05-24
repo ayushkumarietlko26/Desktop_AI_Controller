@@ -200,13 +200,13 @@ export function processGestures(
 
   let command: AgentCommand | null = null;
 
-  if (currentMode === 0) {
-    const canMove = pointer || isIndexExtended(lm);
-    if (canMove) {
-      const { x, y } = pointer ?? mapHandToScreen(indexX, indexY, width, height);
-      const action = resolveMouseAction(fingers, lm, width);
-      command = { action, x, y };
-    }
+  if (currentMode === 0 && pointer) {
+    const action = resolveMouseAction(fingers, lm, width);
+    command = { action, x: pointer.x, y: pointer.y };
+  } else if (currentMode === 0 && isIndexExtended(lm)) {
+    const { x, y } = mapHandToScreen(indexX, indexY, width, height);
+    const action = resolveMouseAction(fingers, lm, width);
+    command = { action, x, y };
   } else if (currentMode === 1) {
     const swipe = getSwipeDirection(state, width);
     if (swipe === 'Right') command = { action: 'SWIPE_RIGHT' };
