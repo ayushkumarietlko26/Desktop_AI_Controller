@@ -21,4 +21,4 @@ COPY . .
 
 # Expose port and start gunicorn
 EXPOSE 5000
-CMD ["gunicorn", "-k", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", "-w", "1", "-b", "0.0.0.0:5000", "server:app"]
+CMD ["gunicorn", "-k", "geventwebsocket.gunicorn.workers.GeventWebSocketWorker", "-w", "1", "-b", "0.0.0.0:5000", "--timeout", "120", "--keep-alive", "5", "server:app"]

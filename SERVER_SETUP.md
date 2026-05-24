@@ -12,7 +12,7 @@ This guide explains how to deploy the Backend to Render and how to run the Local
    - **Name**: `desktop-ai-controller` (or any name you like)
    - **Environment**: `Python 3`
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 server:app`
+   - **Start Command**: `gunicorn -k geventwebsocket.gunicorn.workers.GeventWebSocketWorker -w 1 --timeout 120 --keep-alive 5 server:app`
 6. Click **Create Web Service**.
 7. Wait for the deployment to finish. Once done, copy your **Render URL** (e.g., `https://desktop-ai-controller.onrender.com`).
 
@@ -23,7 +23,10 @@ This guide explains how to deploy the Backend to Render and how to run the Local
 3. Import your GitHub repository.
 4. Set the **Root Directory** to `frontend`.
 5. Vercel will automatically detect the Vite Framework. Click **Deploy**.
-6. Once deployed, open your Vercel site.
+6. In Vercel project **Settings → Environment Variables**, add:
+   - `VITE_SERVER_URL` = your Render URL (e.g. `https://desktop-ai-controller-16.onrender.com`)
+7. Redeploy after adding the env var so the frontend pre-fills the correct server URL.
+8. Once deployed, open your Vercel site.
 
 ## 3. Running the Local Agent on Your PC
 

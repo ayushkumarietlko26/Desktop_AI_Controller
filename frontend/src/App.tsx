@@ -14,17 +14,26 @@ import {
   Server
 } from 'lucide-react';
 
+const DEFAULT_SERVER_URL =
+  import.meta.env.VITE_SERVER_URL || 'https://desktop-ai-controller-16.onrender.com';
+
+const STREAM_WIDTH = 320;
+const STREAM_HEIGHT = 240;
+const STREAM_JPEG_QUALITY = 0.45;
+
 const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState(0);
   const [jarvisActive, setJarvisActive] = useState(false);
   
   // Cloud Architecture States
-  const [serverUrl, setServerUrl] = useState('http://localhost:5000');
+  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER_URL);
   const [roomId, setRoomId] = useState(() => Math.random().toString(36).substring(2, 8).toUpperCase());
   const [isConnected, setIsConnected] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
 
   const socketRef = useRef<Socket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -32,6 +41,20 @@ const App: React.FC = () => {
   const streamIntervalRef = useRef<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const recognitionRef = useRef<any>(null);
+  const waitingForFrameRef = useRef(false);
+  const frameSentAtRef = useRef(0);
+  const roomIdRef = useRef(roomId);
+  const activeModeRef = useRef(activeMode);
+  const lastFrameTimeRef = useRef(0);
+  const frameCountRef = useRef(0);
+
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
+
+  useEffect(() => {
+    activeModeRef.current = activeMode;
+  }, [activeMode]);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -60,25 +83,81 @@ const App: React.FC = () => {
     }
   }, [isConnected, roomId, isListening]);
 
+  const sendVideoFrame = () => {
+    if (
+      waitingForFrameRef.current &&
+      performance.now() - frameSentAtRef.current < 2500
+    ) {
+      return;
+    }
+    if (
+      !socketRef.current?.connected ||
+      !videoRef.current ||
+      !canvasRef.current
+    ) {
+      return;
+    }
+
+    const ctx = canvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    ctx.drawImage(videoRef.current, 0, 0, STREAM_WIDTH, STREAM_HEIGHT);
+    const dataUrl = canvasRef.current.toDataURL('image/jpeg', STREAM_JPEG_QUALITY);
+    waitingForFrameRef.current = true;
+    frameSentAtRef.current = performance.now();
+    socketRef.current.emit('video_frame', { room: roomIdRef.current, frame: dataUrl });
+
+    frameCountRef.current += 1;
+    const now = performance.now();
+    if (now - lastFrameTimeRef.current >= 1000) {
+      setFps(frameCountRef.current);
+      frameCountRef.current = 0;
+      lastFrameTimeRef.current = now;
+    }
+  };
+
   // Handle Socket Connection
   const connectToServer = () => {
     if (socketRef.current) socketRef.current.disconnect();
-    
-    const socket = io(serverUrl);
+
+    setConnectionError(null);
+    const isSecure = serverUrl.startsWith('https://');
+
+    const socket = io(serverUrl, {
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      secure: isSecure,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 20000,
+    });
     
     socket.on('connect', () => {
       setIsConnected(true);
+      setConnectionError(null);
       socket.emit('join', { room: roomId, role: 'frontend' });
-      socket.emit('change_mode', { room: roomId, mode: activeMode });
+      socket.emit('change_mode', { room: roomId, mode: activeModeRef.current });
+    });
+
+    socket.on('connect_error', (err) => {
+      setConnectionError(err.message || 'Could not connect to server');
+      setIsConnected(false);
     });
 
     socket.on('disconnect', () => {
       setIsConnected(false);
       setIsStreaming(false);
+      waitingForFrameRef.current = false;
+    });
+
+    socket.on('join_error', (data: { error: string }) => {
+      setConnectionError(`MediaPipe init failed: ${data.error}`);
     });
 
     socket.on('processed_frame', (data: { frame: string }) => {
       setProcessedImage(data.frame);
+      waitingForFrameRef.current = false;
     });
 
     socket.on('mode_changed', (data: { mode: number }) => {
@@ -107,6 +186,7 @@ const App: React.FC = () => {
   const toggleStreaming = async () => {
     if (isStreaming) {
       setIsStreaming(false);
+      waitingForFrameRef.current = false;
       if (streamIntervalRef.current) clearInterval(streamIntervalRef.current);
       if (workerRef.current) {
         workerRef.current.postMessage('stop');
@@ -119,16 +199,28 @@ const App: React.FC = () => {
         videoRef.current.srcObject = null;
       }
       setProcessedImage(null);
+      setFps(0);
     } else {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: STREAM_WIDTH },
+            height: { ideal: STREAM_HEIGHT },
+            frameRate: { ideal: 15, max: 20 },
+            facingMode: 'user',
+          },
+          audio: false,
+        });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play();
+          await videoRef.current.play();
         }
         setIsStreaming(true);
+        waitingForFrameRef.current = false;
+        frameCountRef.current = 0;
+        lastFrameTimeRef.current = performance.now();
 
-        // Web Worker to prevent background tab interval throttling
+        // Web Worker avoids background-tab timer throttling
         const workerCode = `
           let intervalId = null;
           self.onmessage = function(e) {
@@ -136,7 +228,7 @@ const App: React.FC = () => {
               if (intervalId) clearInterval(intervalId);
               intervalId = setInterval(() => {
                 self.postMessage('tick');
-              }, 100);
+              }, 66);
             } else if (e.data === 'stop') {
               if (intervalId) {
                 clearInterval(intervalId);
@@ -148,17 +240,8 @@ const App: React.FC = () => {
         const blob = new Blob([workerCode], { type: 'application/javascript' });
         const worker = new Worker(URL.createObjectURL(blob));
 
-        worker.onmessage = (e) => {
-          if (e.data === 'tick') {
-            if (videoRef.current && canvasRef.current && socketRef.current && isConnected) {
-              const ctx = canvasRef.current.getContext('2d');
-              if (ctx) {
-                ctx.drawImage(videoRef.current, 0, 0, 640, 480);
-                const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.5); // compress
-                socketRef.current.emit('video_frame', { room: roomId, frame: dataUrl });
-              }
-            }
-          }
+        worker.onmessage = () => {
+          sendVideoFrame();
         };
 
         worker.postMessage('start');
@@ -275,8 +358,12 @@ const App: React.FC = () => {
                 {isConnected ? 'Connected' : 'Connect'}
               </button>
             </div>
-            <p style={{ fontSize: '0.85rem', color: '#eab308', marginTop: '10px', lineHeight: '1.4', textAlign: 'left' }}>
-              <strong>Tip for Background Tracking:</strong> Keep this browser window visible in the background or resize it smaller. If fully minimized to the taskbar, your browser will suspend your webcam hardware.
+            <p style={{ fontSize: '0.85rem', color: connectionError ? '#ff6b6b' : '#888', marginTop: '8px', textAlign: 'left' }}>
+              {connectionError
+                ? connectionError
+                : isStreaming
+                  ? `Streaming ~${fps} fps (cloud-processed)`
+                  : 'Connect, then start the camera. Frames are sent only after the server finishes each one to avoid lag.'}
             </p>
           </div>
 
@@ -365,7 +452,7 @@ const App: React.FC = () => {
       </main>
 
       {/* Hidden canvas element for streaming */}
-      <canvas ref={canvasRef} width="640" height="480" style={{ display: 'none' }} />
+      <canvas ref={canvasRef} width={STREAM_WIDTH} height={STREAM_HEIGHT} style={{ display: 'none' }} />
 
       <section id="features" className="features-section">
         <div className="section-header">

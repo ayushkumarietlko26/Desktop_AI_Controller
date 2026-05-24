@@ -9,7 +9,8 @@ class HandDetector:
     finger_tip_ids = [4, 8, 12, 16, 20]  # landmark IDs for finger tips [thumb, index, middle, ring, pinky]
 
     def __init__(self, mode=False, max_num_hands=2,
-                 min_detection_confidence=0.5, min_tracking_confidence=0.5, max_miscalculations=5):
+                 min_detection_confidence=0.5, min_tracking_confidence=0.5,
+                 max_miscalculations=5, model_complexity=1):
         """
         Initializing attributes
         """
@@ -17,13 +18,16 @@ class HandDetector:
         self.max_num_hands = max_num_hands
         self.min_detection_confidence = min_detection_confidence
         self.min_tracking_confidence = min_tracking_confidence
+        self.model_complexity = model_complexity
 
         self.mpHands = mp.solutions.hands
         self.hands = self.mpHands.Hands(
-        static_image_mode=self.mode,
-        max_num_hands=self.max_num_hands,
-        min_detection_confidence=self.min_detection_confidence,
-        min_tracking_confidence=self.min_tracking_confidence)
+            static_image_mode=self.mode,
+            max_num_hands=self.max_num_hands,
+            min_detection_confidence=self.min_detection_confidence,
+            min_tracking_confidence=self.min_tracking_confidence,
+            model_complexity=self.model_complexity,
+        )
 
         self.mpDraw = mp.solutions.drawing_utils
 
