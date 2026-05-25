@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { HandLandmarker } from '@mediapipe/tasks-vision';
-import { createHandLandmarker, drawHandPreview } from './handTracker';
+import {
+  createHandLandmarker,
+  drawHandPreview,
+  detectHandsFromVideo,
+} from './handTracker';
 import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
@@ -13,7 +17,8 @@ import {
   readHandedness,
 } from './gestureEngine';
 import { SmoothPointer, indexTipPixels } from './smoothPointer';
-import { BackgroundSession } from './backgroundSession';
+import { BackgroundSession, hiddenVideoStyle } from './backgroundSession';
+import { attachTrackingScheduler } from './trackingScheduler';
 
 const params = new URLSearchParams(window.location.search);
 const ROOM_ID = (params.get('room') || '').toUpperCase();
@@ -32,13 +37,13 @@ const CompanionApp: React.FC = () => {
   const gestureStateRef = useRef(new GestureState());
   const smoothPointerRef = useRef(new SmoothPointer());
   const activeModeRef = useRef(INITIAL_MODE);
-  const rafRef = useRef<number | null>(null);
   const isRunningRef = useRef(false);
   const lastEmitRef = useRef({ x: 0.5, y: 0.5, t: 0 });
   const lastClickRef = useRef('');
   const frameCountRef = useRef(0);
   const lastFpsRef = useRef(0);
   const backgroundSessionRef = useRef(new BackgroundSession());
+  const stopSchedulerRef = useRef<(() => void) | null>(null);
 
   const applyMode = useCallback((mode: number) => {
     const clamped = Math.max(0, Math.min(3, mode));
@@ -68,12 +73,22 @@ const CompanionApp: React.FC = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const landmarker = landmarkerRef.current;
-    if (!video || !canvas || !landmarker || video.readyState < 2) return;
+    if (!video || !landmarker || video.readyState < 2) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const timestamp = performance.now();
+    const hidden = document.visibilityState === 'hidden';
 
-    const result = drawHandPreview(ctx, video, landmarker, performance.now());
+    const result =
+      !hidden && canvas
+        ? (() => {
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return null;
+            return drawHandPreview(ctx, video, landmarker, timestamp);
+          })()
+        : detectHandsFromVideo(video, landmarker, timestamp);
+
+    if (!result) return;
+
     frameCountRef.current += 1;
     const now = performance.now();
     if (now - lastFpsRef.current >= 1000) {
@@ -123,24 +138,52 @@ const CompanionApp: React.FC = () => {
           lastClickRef.current = '';
         }
       }
+    } else if (activeModeRef.current === 0) {
+      const coast = smoothPointerRef.current.coastOnly();
+      if (coast) emitCommand('MOUSE_MOVE', coast.x, coast.y);
     }
   }, [applyMode, emitCommand]);
 
-  const loop = useCallback(() => {
-    if (!isRunningRef.current) return;
-    runFrame();
-    rafRef.current = requestAnimationFrame(loop);
-  }, [runFrame]);
+  const stopScheduler = useCallback(() => {
+    stopSchedulerRef.current?.();
+    stopSchedulerRef.current = null;
+  }, []);
 
-  const startCamera = useCallback(async (stream: MediaStream) => {
-    if (!videoRef.current) return;
-    videoRef.current.srcObject = stream;
-    await videoRef.current.play();
-    isRunningRef.current = true;
-    await backgroundSessionRef.current.start();
-    setStatus(`Room ${ROOM_ID} · control active`);
-    rafRef.current = requestAnimationFrame(loop);
-  }, [loop]);
+  const startScheduler = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    stopScheduler();
+    stopSchedulerRef.current = attachTrackingScheduler(
+      video,
+      runFrame,
+      () => isRunningRef.current
+    );
+  }, [runFrame, stopScheduler]);
+
+  const requestCamera = useCallback(async () => {
+    return navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: TRACK_WIDTH },
+        height: { ideal: TRACK_HEIGHT },
+        frameRate: { ideal: 30, max: 30 },
+        facingMode: 'user',
+      },
+      audio: false,
+    });
+  }, []);
+
+  const startCamera = useCallback(
+    async (stream: MediaStream) => {
+      if (!videoRef.current) return;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      isRunningRef.current = true;
+      await backgroundSessionRef.current.start();
+      setStatus(`Room ${ROOM_ID} · control active`);
+      startScheduler();
+    },
+    [startScheduler]
+  );
 
   const connectSocket = useCallback(() => {
     const socket = io(SERVER_URL, {
@@ -168,17 +211,10 @@ const CompanionApp: React.FC = () => {
         connectSocket();
 
         if (window.opener) {
-          setStatus('Waiting for camera from main window...');
+          setStatus('Waiting for camera…');
           window.opener.postMessage({ type: 'companion-ready' }, window.location.origin);
         } else {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              width: { ideal: TRACK_WIDTH },
-              height: { ideal: TRACK_HEIGHT },
-              facingMode: 'user',
-            },
-            audio: false,
-          });
+          const stream = await requestCamera();
           await startCamera(stream);
         }
       } catch (e) {
@@ -189,6 +225,18 @@ const CompanionApp: React.FC = () => {
 
     const onMessage = async (e: MessageEvent) => {
       if (e.origin !== window.location.origin) return;
+      if (e.data?.type === 'start-own-camera') {
+        try {
+          const stream = await requestCamera();
+          await startCamera(stream);
+          if (typeof e.data.mode === 'number') {
+            applyMode(e.data.mode);
+          }
+        } catch (err) {
+          setStatus('Camera blocked — allow webcam for this window.');
+          console.error(err);
+        }
+      }
       if (e.data?.type === 'init-stream' && e.data.stream) {
         await startCamera(e.data.stream as MediaStream);
         if (typeof e.data.mode === 'number') {
@@ -204,18 +252,21 @@ const CompanionApp: React.FC = () => {
     return () => {
       cancelled = true;
       isRunningRef.current = false;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      stopScheduler();
       socketRef.current?.disconnect();
       void backgroundSessionRef.current.stop();
       landmarkerRef.current?.close();
+      const v = videoRef.current;
+      if (v?.srcObject) {
+        (v.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+      }
       window.removeEventListener('message', onMessage);
     };
-  }, [applyMode, connectSocket, startCamera]);
+  }, [applyMode, connectSocket, requestCamera, startCamera, stopScheduler]);
 
   const modeColor = MODE_COLORS[activeMode] ?? '#0f0';
   const modeName = MODE_NAMES[activeMode] ?? 'MODE';
-  const presentationHint =
-    activeMode === 1 ? ' · 1↑ prev · 2↑ next' : '';
+  const presentationHint = activeMode === 1 ? ' · 1↑ prev · 2↑ next' : '';
 
   return (
     <div
@@ -241,13 +292,7 @@ const CompanionApp: React.FC = () => {
           gap: '2px',
         }}
       >
-        <span
-          style={{
-            fontWeight: 700,
-            color: modeColor,
-            fontSize: '11px',
-          }}
-        >
+        <span style={{ fontWeight: 700, color: modeColor, fontSize: '11px' }}>
           {modeName}
         </span>
         <span style={{ color: '#aaa' }}>
@@ -261,7 +306,7 @@ const CompanionApp: React.FC = () => {
           height={TRACK_HEIGHT}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
-        <video ref={videoRef} autoPlay playsInline muted style={{ display: 'none' }} />
+        <video ref={videoRef} autoPlay playsInline muted style={hiddenVideoStyle} />
       </div>
     </div>
   );

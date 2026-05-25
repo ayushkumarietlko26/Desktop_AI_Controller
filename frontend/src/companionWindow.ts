@@ -10,8 +10,8 @@ const OVERLAY_OPTS: Record<
   OverlayKind,
   { windowName: string; width: number; height: number }
 > = {
-  mini: { windowName: 'CloudControllerMini', width: 260, height: 200 },
-  popout: { windowName: 'CloudControllerPopout', width: 280, height: 220 },
+  mini: { windowName: 'CloudControllerMini', width: 320, height: 280 },
+  popout: { windowName: 'CloudControllerPopout', width: 320, height: 280 },
 };
 
 export function openOverlayWindow(

@@ -15,13 +15,26 @@ import {
   Server,
   PictureInPicture,
 } from 'lucide-react';
-import { createHandLandmarker, drawHandPreview } from './handTracker';
+import {
+  createHandLandmarker,
+  drawHandPreview,
+  detectHandsFromVideo,
+} from './handTracker';
 import {
   BackgroundSession,
   isDocumentHidden,
   hiddenVideoStyle,
 } from './backgroundSession';
 import { openCompanionWindow, openPopoutWindow } from './companionWindow';
+import { attachTrackingScheduler } from './trackingScheduler';
+import {
+  closeDocumentPipPreview,
+  isDocumentPipOpen,
+  isDocumentPipSupported,
+  openDocumentPipPreview,
+  syncPreviewToDocumentPip,
+  updateDocumentPipMode,
+} from './documentPipPreview';
 import {
   TRACK_WIDTH,
   TRACK_HEIGHT,
@@ -55,6 +68,7 @@ const App: React.FC = () => {
   const [runningInBackground, setRunningInBackground] = useState(false);
   const [pipActive, setPipActive] = useState(false);
   const [miniWindowActive, setMiniWindowActive] = useState(false);
+  const [floatPreviewActive, setFloatPreviewActive] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -66,18 +80,19 @@ const App: React.FC = () => {
   const lastEmitRef = useRef({ x: 0.5, y: 0.5, t: 0 });
   const MOVE_EMIT_MIN_DIST = 0.002;
   const MOVE_EMIT_MAX_MS = 45;
-  const rafRef = useRef<number | null>(null);
   const roomIdRef = useRef(roomId);
   const activeModeRef = useRef(activeMode);
   const lastFrameTimeRef = useRef(0);
   const frameCountRef = useRef(0);
   const lastClickActionRef = useRef('');
   const isStreamingRef = useRef(false);
-  const bgIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const stopSchedulerRef = useRef<(() => void) | null>(null);
   const backgroundSessionRef = useRef(new BackgroundSession());
   const companionWindowRef = useRef<Window | null>(null);
   const popoutWindowRef = useRef<Window | null>(null);
   const miniWindowActiveRef = useRef(false);
+  const pipActiveRef = useRef(false);
+  const autoMiniOnHideRef = useRef(false);
 
   useEffect(() => {
     roomIdRef.current = roomId;
@@ -178,14 +193,22 @@ const App: React.FC = () => {
     }
 
     const timestamp = performance.now();
+    const hidden = isDocumentHidden();
+    const showMainPreview =
+      !miniWindowActiveRef.current &&
+      !pipActiveRef.current &&
+      (!hidden || isDocumentPipOpen());
 
     let result;
-    if (canvas) {
+    if (showMainPreview && canvas) {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       result = drawHandPreview(ctx, video, landmarker, timestamp);
+      if (isDocumentPipOpen()) {
+        syncPreviewToDocumentPip(canvas);
+      }
     } else {
-      return;
+      result = detectHandsFromVideo(video, landmarker, timestamp);
     }
 
     frameCountRef.current += 1;
@@ -253,48 +276,51 @@ const App: React.FC = () => {
     }
   }, [emitCommand]);
 
-  const scheduleVisibleLoop = useCallback(() => {
-    if (!isStreamingRef.current || isDocumentHidden()) return;
-    rafRef.current = requestAnimationFrame(() => {
-      runTrackingFrame();
-      scheduleVisibleLoop();
-    });
-  }, [runTrackingFrame]);
+  const releaseMainCamera = useCallback(() => {
+    const video = videoRef.current;
+    if (!video?.srcObject) return;
+    (video.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+    video.srcObject = null;
+  }, []);
 
-  const stopBackgroundInterval = useCallback(() => {
-    if (bgIntervalRef.current !== null) {
-      clearInterval(bgIntervalRef.current);
-      bgIntervalRef.current = null;
-    }
+  const stopTrackingScheduler = useCallback(() => {
+    stopSchedulerRef.current?.();
+    stopSchedulerRef.current = null;
     setRunningInBackground(false);
   }, []);
 
-  const startBackgroundInterval = useCallback(() => {
-    if (bgIntervalRef.current !== null) return;
-    setRunningInBackground(true);
-    bgIntervalRef.current = setInterval(() => {
-      if (!isStreamingRef.current) return;
-      void videoRef.current?.play().catch(() => {});
-      runTrackingFrame();
-    }, 33);
-  }, [runTrackingFrame]);
-
   const startTrackingScheduler = useCallback(() => {
-    if (isDocumentHidden()) {
-      startBackgroundInterval();
-    } else {
-      stopBackgroundInterval();
-      scheduleVisibleLoop();
-    }
-  }, [scheduleVisibleLoop, startBackgroundInterval, stopBackgroundInterval]);
+    const video = videoRef.current;
+    if (!video) return;
+    stopTrackingScheduler();
+    setRunningInBackground(isDocumentHidden());
+    stopSchedulerRef.current = attachTrackingScheduler(
+      video,
+      runTrackingFrame,
+      () => isStreamingRef.current && !miniWindowActiveRef.current && !pipActiveRef.current
+    );
+  }, [runTrackingFrame, stopTrackingScheduler]);
 
-  const stopTrackingScheduler = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+  const restartMainCamera = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: TRACK_WIDTH },
+          height: { ideal: TRACK_HEIGHT },
+          frameRate: { ideal: 30, max: 30 },
+          facingMode: 'user',
+        },
+        audio: false,
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      startTrackingScheduler();
+    } catch (err) {
+      console.error('Could not restart camera after overlay closed:', err);
     }
-    stopBackgroundInterval();
-  }, [stopBackgroundInterval]);
+  }, [startTrackingScheduler]);
 
   const connectToServer = () => {
     if (socketRef.current) socketRef.current.disconnect();
@@ -355,7 +381,10 @@ const App: React.FC = () => {
     isStreamingRef.current = false;
     stopTrackingScheduler();
     void backgroundSessionRef.current.stop();
+    closeDocumentPipPreview();
+    setFloatPreviewActive(false);
     setPipActive(false);
+    pipActiveRef.current = false;
     if (companionWindowRef.current && !companionWindowRef.current.closed) {
       companionWindowRef.current.close();
     }
@@ -429,28 +458,32 @@ const App: React.FC = () => {
     };
   }, [stopStreaming]);
 
-  useEffect(() => {
-    const onVisibility = async () => {
-      if (!isStreamingRef.current) return;
-
-      if (document.visibilityState === 'hidden') {
-        if (rafRef.current !== null) {
-          cancelAnimationFrame(rafRef.current);
-          rafRef.current = null;
-        }
-        await videoRef.current?.play().catch(() => {});
-        startBackgroundInterval();
-      } else {
-        stopBackgroundInterval();
-        scheduleVisibleLoop();
-      }
-    };
-
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [scheduleVisibleLoop, startBackgroundInterval, stopBackgroundInterval]);
+  const toggleFloatPreview = useCallback(async () => {
+    if (!isStreaming) {
+      alert('Start the camera first.');
+      return;
+    }
+    if (!isDocumentPipSupported()) {
+      alert(
+        'Float Preview needs Chrome or Edge (recent version). Use Mini Window, or keep this tab visible.'
+      );
+      return;
+    }
+    if (isDocumentPipOpen() || floatPreviewActive) {
+      closeDocumentPipPreview();
+      setFloatPreviewActive(false);
+      return;
+    }
+    const ok = await openDocumentPipPreview(activeModeRef.current, () => {
+      setFloatPreviewActive(false);
+    });
+    if (ok) {
+      setFloatPreviewActive(true);
+      updateDocumentPipMode(activeModeRef.current);
+    } else {
+      alert('Could not open Float Preview. Try Chrome/Edge with camera already running.');
+    }
+  }, [isStreaming, floatPreviewActive]);
 
   const togglePictureInPicture = async () => {
     if (!isStreaming || !videoRef.current?.srcObject) {
@@ -481,13 +514,14 @@ const App: React.FC = () => {
       if (e.source !== w || e.data?.type !== 'companion-ready') return;
       w.postMessage(
         {
-          type: 'init-stream',
-          stream: videoRef.current?.srcObject,
+          type: 'start-own-camera',
           mode: activeModeRef.current,
         },
         window.location.origin
       );
+      releaseMainCamera();
       stopTrackingScheduler();
+      pipActiveRef.current = true;
       setPipActive(true);
     };
     window.addEventListener('message', onPopoutMessage);
@@ -497,14 +531,15 @@ const App: React.FC = () => {
       window.clearInterval(closeCheck);
       window.removeEventListener('message', onPopoutMessage);
       popoutWindowRef.current = null;
+      pipActiveRef.current = false;
       setPipActive(false);
       if (isStreamingRef.current && !miniWindowActiveRef.current) {
-        startTrackingScheduler();
+        void restartMainCamera();
       }
     }, 400);
   };
 
-  const openMiniWindow = () => {
+  const openMiniWindow = useCallback(() => {
     if (!isStreaming || !videoRef.current?.srcObject) {
       alert('Start the camera first.');
       return;
@@ -531,12 +566,12 @@ const App: React.FC = () => {
       if (e.source !== w || e.data?.type !== 'companion-ready') return;
       w.postMessage(
         {
-          type: 'init-stream',
-          stream: videoRef.current?.srcObject,
+          type: 'start-own-camera',
           mode: activeModeRef.current,
         },
         window.location.origin
       );
+      releaseMainCamera();
       stopTrackingScheduler();
       miniWindowActiveRef.current = true;
       setMiniWindowActive(true);
@@ -551,10 +586,48 @@ const App: React.FC = () => {
       miniWindowActiveRef.current = false;
       setMiniWindowActive(false);
       if (isStreamingRef.current) {
-        startTrackingScheduler();
+        void restartMainCamera();
       }
     }, 400);
-  };
+  }, [
+    isStreaming,
+    serverUrl,
+    releaseMainCamera,
+    stopTrackingScheduler,
+    restartMainCamera,
+  ]);
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!isStreamingRef.current) return;
+      const hidden = document.visibilityState === 'hidden';
+      setRunningInBackground(hidden && !miniWindowActiveRef.current);
+
+      if (
+        hidden &&
+        !miniWindowActiveRef.current &&
+        !pipActiveRef.current &&
+        !autoMiniOnHideRef.current
+      ) {
+        autoMiniOnHideRef.current = true;
+        if (!companionWindowRef.current || companionWindowRef.current.closed) {
+          openMiniWindow();
+        }
+      }
+      if (!hidden) {
+        autoMiniOnHideRef.current = false;
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [openMiniWindow]);
+
+  useEffect(() => {
+    if (floatPreviewActive || isDocumentPipOpen()) {
+      updateDocumentPipMode(activeMode);
+    }
+  }, [activeMode, floatPreviewActive]);
 
   const toggleJarvis = () => {
     if (!recognitionRef.current) {
@@ -636,13 +709,17 @@ const App: React.FC = () => {
       ? 'Loading MediaPipe...'
       : isStreaming
         ? miniWindowActive
-          ? `Mini window active · minimize this tab freely`
-          : runningInBackground || pipActive
-            ? `Background / pop-out · ${fps} fps · hand control on`
-            : agentPaired
-              ? `Tracking ${fps} fps · ${cmdCount} sent · use Mini Window to minimize`
-              : `Tracking ${fps} fps · start local_agent.py (Room: ${roomId})`
-        : 'Connect & start camera. Use Mini Window (best) or Small Pop-out, then minimize.';
+          ? `Mini window controls PC — keep that window open (preview + tracking)`
+          : floatPreviewActive
+            ? `Float Preview on top — click PowerPoint; gestures still work (${fps} fps)`
+            : pipActive
+              ? `Pop-out active · keep pop-out window visible`
+              : runningInBackground
+                ? `Tab hidden · ${fps} fps — Mini Window opens when possible`
+                : agentPaired
+                  ? `Tracking ${fps} fps · ${cmdCount} cmds · open Float Preview before PowerPoint`
+                  : `Tracking ${fps} fps · start local_agent.py (Room: ${roomId})`
+        : 'Connect & start camera. For PowerPoint: Float Preview. To minimize tab: Mini Window.';
 
   return (
     <div className="app-container">
@@ -783,9 +860,31 @@ const App: React.FC = () => {
             </button>
             <button
               type="button"
+              onClick={toggleFloatPreview}
+              disabled={!isStreaming}
+              title="Always-on-top hand preview — stays visible over PowerPoint and other apps (Chrome/Edge)"
+              style={{
+                border: '1px solid #ff8c00',
+                color: floatPreviewActive ? '#000' : '#ff8c00',
+                backgroundColor: floatPreviewActive ? '#ff8c00' : 'transparent',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                cursor: isStreaming ? 'pointer' : 'not-allowed',
+                opacity: isStreaming ? 1 : 0.45,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '13px',
+              }}
+            >
+              <PictureInPicture size={18} />
+              {floatPreviewActive ? 'Float On' : 'Float Preview'}
+            </button>
+            <button
+              type="button"
               onClick={openMiniWindow}
               disabled={!isStreaming}
-              title="Opens a tiny window — keeps control when browser is minimized"
+              title="Separate window with own camera — use before minimizing the browser tab"
               style={{
                 border: '1px solid #00ffcc',
                 color: miniWindowActive ? '#000' : '#00ffcc',
@@ -797,10 +896,11 @@ const App: React.FC = () => {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
+                fontSize: '13px',
               }}
             >
-              <PictureInPicture size={18} />
-              {miniWindowActive ? 'Mini Window On' : 'Mini Window'}
+              <Video size={18} />
+              {miniWindowActive ? 'Mini On' : 'Mini Window'}
             </button>
             <button
               type="button"

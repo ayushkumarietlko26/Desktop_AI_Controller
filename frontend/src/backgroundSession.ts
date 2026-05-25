@@ -1,6 +1,6 @@
 /**
- * Background session + canvas-based pop-out (landmarks + mode visible).
- * Native video PiP is intentionally not used — it cannot show hand landmarks.
+ * Background session: wake lock + silent audio keep camera/tracking alive when tab is hidden.
+ * Landmark preview over other apps uses Document Picture-in-Picture (documentPipPreview.ts).
  */
 
 export class BackgroundSession {
@@ -8,13 +8,25 @@ export class BackgroundSession {
   private audioCtx: AudioContext | null = null;
   private oscillator: OscillatorNode | null = null;
   private gain: GainNode | null = null;
+  private onVisibility: (() => void) | null = null;
 
   async start(): Promise<void> {
     await this.acquireWakeLock();
     this.startSilentAudio();
+    this.onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void this.acquireWakeLock();
+        void this.audioCtx?.resume();
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   async stop(): Promise<void> {
+    if (this.onVisibility) {
+      document.removeEventListener('visibilitychange', this.onVisibility);
+      this.onVisibility = null;
+    }
     this.releaseWakeLock();
     this.stopSilentAudio();
   }
@@ -82,14 +94,18 @@ export function isDocumentHidden(): boolean {
   return document.visibilityState === 'hidden';
 }
 
-/** Video must stay in DOM (not display:none) for camera capture */
+/**
+ * Video must stay in DOM with real dimensions (not display:none).
+ * Off-screen + low opacity keeps capture alive when the tab is minimized.
+ */
 export const hiddenVideoStyle: Record<string, string | number> = {
   position: 'fixed',
-  left: 0,
+  left: '-9999px',
   top: 0,
-  width: '2px',
-  height: '2px',
+  width: 480,
+  height: 360,
   opacity: 0.01,
   pointerEvents: 'none',
   zIndex: -1,
+  visibility: 'visible',
 };
