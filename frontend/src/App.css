@@ -312,6 +312,36 @@ body {
   50% { transform: translateY(-20px) rotate(5deg); }
 }
 
+/* Agent download buttons (setup section) */
+.agent-download-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: 100%;
+}
+
+.agent-download-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.65rem 1rem;
+  border: 1px solid #00ffcc55;
+  border-radius: 8px;
+  background: rgba(0, 255, 204, 0.08);
+  color: #00ffcc;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.agent-download-btn:hover {
+  background: rgba(0, 255, 204, 0.18);
+  border-color: #00ffcc;
+}
+
 /* Install Section */
 .install-section {
   padding: 8rem 10%;

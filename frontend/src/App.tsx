@@ -31,6 +31,7 @@ import {
   readHandedness,
 } from './gestureEngine';
 import { SmoothPointer, indexTipPixels } from './smoothPointer';
+import { AGENT_DOWNLOADS, downloadAgentFile } from './agentDownloads';
 
 const DEFAULT_SERVER_URL =
   import.meta.env.VITE_SERVER_URL || 'https://desktop-ai-controller-16.onrender.com';
@@ -965,7 +966,23 @@ const App: React.FC = () => {
               <Download size={32} />
             </div>
             <h3>1. Download Agent</h3>
-            <p>You need `local_agent.py` and `agent_requirements.txt`.</p>
+            <p style={{ marginBottom: '12px' }}>
+              Save both files to the same folder on your Windows PC, then run the commands in step 2.
+            </p>
+            <div className="agent-download-list">
+              {AGENT_DOWNLOADS.map((file) => (
+                <button
+                  key={file.filename}
+                  type="button"
+                  className="agent-download-btn"
+                  onClick={() => downloadAgentFile(file.href, file.filename)}
+                  title={file.description}
+                >
+                  <Download size={16} />
+                  {file.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="mode-card active" style={{ '--accent': '#ff8c00' } as React.CSSProperties}>

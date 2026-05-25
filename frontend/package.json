@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "copy-agent": "node scripts/copy-agent-assets.mjs",
+    "predev": "node scripts/copy-agent-assets.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/copy-agent-assets.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
