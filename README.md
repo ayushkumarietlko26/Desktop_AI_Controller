@@ -1,80 +1,182 @@
-# AI-Based-Desktop-Controller
+# Desktop AI Controller
 
-Computer vision based alternative to a physical mouse and keyboard built using computer vision with Python, OpenCV and Mediapipe. Allows intuitive hand gesture based control of mouse motion and mouse buttons, a hand gesture based master volume slider for convenience, and speech-to-text typing functionality using google's web speech to text API also triggered by hand gesture.
+Control your Windows PC with **hand gestures** and **voice commands**—no physical mouse required for many tasks. The system uses **MediaPipe** for real-time hand tracking and relays lightweight commands through a **cloud WebSocket server** to a **local agent** that executes actions on your desktop.
 
-<!--Collection of tools for Windows users built using computer vision with Python, OpenCV and Mediapipe-->
-![Python](https://img.shields.io/badge/-Python-05122A?style=flat&logo=Python)
-![OpenCV](https://img.shields.io/badge/-OpenCV-05122A?style=flat&logo=OpenCV)&nbsp;
-![Mediapipe](https://img.shields.io/badge/-Mediapipe-05122A?style=flat&logo=google-podcasts&logoColor=green)&nbsp;
-![Python](https://img.shields.io/badge/-Google_SpeechToText_API-05122A?style=flat&logo=google&&logoColor=yellow)&nbsp;
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=black)
+![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.14-4285F4?style=flat&logo=google&logoColor=white)
+![Socket.IO](https://img.shields.io/badge/Socket.IO-4.x-010101?style=flat&logo=socket.io&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat)
 
-<!-- 
-<img src="https://img.shields.io/badge/-Python" /> <img src="https://img.shields.io/badge/-OpenCV-blue" /> <img src="https://img.shields.io/badge/-Mediapipe-yellow" /> <img src="https://img.shields.io/badge/Google_SpeechToText_API.svg?logo=python&logoColor=white" />-->
+---
 
-<!-- Maybe add audio tool that runs specific program so the program isn't always on. e.g. for volume control, user would say "turn on volume control" to run the program
-  Would be super sick if you used arduino for all this shit too.
---> 
+## Table of Contents
 
-## Demo
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [How It Works](#how-it-works)
+- [Project Structure](#project-structure)
+- [Requirements](#requirements)
+- [Quick Start (Cloud)](#quick-start-cloud)
+- [Local Development](#local-development)
+- [Deployment](#deployment)
+- [Interaction Modes & Gestures](#interaction-modes--gestures)
+- [Voice Commands (Jarvis)](#voice-commands-jarvis)
+- [Legacy Local App](#legacy-local-app)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Performance](#performance)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
 
-https://user-images.githubusercontent.com/47427592/127780214-e368f34d-b88f-4f36-aa8d-97af47eb4187.mp4
+---
 
-*Note that the GUI window in the top right is used mainly for demonstration purposes and can be minimized without any changes in functionality.*
+## Overview
 
-## Usage
+**Desktop AI Controller** is a computer-vision-based desktop automation system. You use a webcam (on a phone or PC) to gesture in the air; the browser detects your hand and sends small command messages to a server; a Python agent on the **target PC** moves the cursor, clicks, changes slides, or runs voice-triggered actions.
 
-**Power Button**
+### Why cloud + local agent?
 
-To toggle the controller on and off users can hover their index finger over the power button in the top right corner of the capture video. The toggle makes a sound so it can be used even when the capture video window is minimized by just moving the hand in top right corner direction until the sound is played. This feature helps prevent users from unintentionally triggering actions with the controller.
+| Design choice | Benefit |
+|---------------|---------|
+| **Hand tracking in the browser** | Video stays on your device—lower latency, more privacy |
+| **Commands only over the network** | Tiny payloads (`MOUSE_MOVE`, clicks)—not full video upload |
+| **Room-based pairing** | Same 6-character room ID links any browser to your PC |
+| **Local agent on target PC** | Only the machine running `local_agent.py` is controlled |
 
-<img src="images/power-button-demo.gif" width="600" height="350" />
+### Two ways to run the project
 
-----------------------------------------------------------------
+| Mode | Entry point | Best for |
+|------|-------------|----------|
+| **Cloud (recommended)** | Web UI + `local_agent.py` | Control from any device; production deployment |
+| **Legacy local** | `python mainGUI.py` | All-in-one PyQt app on one Windows PC |
 
-**Mouse Pad and Volume Controller**
+---
 
-To use the mouse pad or volume controller the users hand must be in the dedicated area outlined in blue on the feedback window. When a hand is detected in a controller area, the area is outlined in green as can be seen in the demo below. There are also sound effects when a hand enters or leaves these areas that are useful when the feedback window is minimized. Both controllers operate based on the location of the index finger.
+## Features
 
-<img src="images/mouse_pad-volume_control-demo.gif" width="600" height="350" />
+- **Mouse mode** — Move cursor, left/right click, drag and drop
+- **Presentation mode** — Previous/next slide via finger holds and palm/fist gestures
+- **Media mode** — Play/pause, next/previous track via swipes and full palm
+- **Jarvis mode** — Voice commands (browser speech-to-text → agent actions)
+- **Smooth cursor** — Median filter and dead-zone smoothing in the browser
+- **Mini / pop-out windows** — Keep tracking when the main tab is minimized
+- **Background session** — Wake lock and hidden-tab frame loop for continuous control
+- **Optional server-side CV** — Fallback path if client-side tracking is disabled
 
-----------------------------------------------------------------
+---
 
-**Left and Right click**
+## Architecture
 
-To left click bring your middle finger up with your index and move them together. To right click bring out your thumb with your index finger and move them together. For both click types the mouse stops moving at the position where the secondary finger is lifted to make it easier for the user to accurately click. The clicks are activated when the distance between the index and secondary finger is less than a certain threshold and the middle circle turns green when a click occurs.
+### High-level flow
 
-<img src="images/right_click-left_click-demo.gif" width="600" height="350" />
+```
+┌─────────────┐     WebSocket      ┌──────────────┐     WebSocket      ┌─────────────────┐
+│   Browser   │  relay_command     │ Cloud server │  agent_command     │  local_agent.py │
+│  (React +   │ ─────────────────► │  server.py   │ ─────────────────► │   (PyAutoGUI)   │
+│  MediaPipe) │                    │ Flask-SocketIO│                    │  Target Windows │
+└─────────────┘                    └──────────────┘                    └─────────────────┘
+       │                                    │
+       └── Webcam stays local               └── Rooms pair frontend + agent
+```
 
-*Note that this version of the left click presses the left mouse key and immediately releases it. Thus, it is useful for double-clicks as demonstrated in the above demo gif when opening the images folder*
+### Six processing layers
 
-----------------------------------------------------------------
+| Layer | Component | Role |
+|-------|-----------|------|
+| 1. Input | Webcam + microphone (browser) | Capture video/audio on the client device |
+| 2. Gesture processing | MediaPipe WASM + `gestureEngine.ts` | 21 landmarks → classified actions |
+| 3. Voice | Web Speech API + `voice_command` relay | Speech → text → agent |
+| 4. Routing | Mode manager + Socket.IO rooms | Mouse / Presentation / Media / Jarvis |
+| 5. Execution | `local_agent.py` | OS-level mouse, keyboard, apps |
+| 6. Feedback | React canvas UI | Landmarks, mode, FPS, connection status |
 
-**Hold Down Left Click**
+### Mermaid diagram
 
-To hold down the left mouse key lift your pinky up with your index finger and to release it lower your pinky. The cursor does not stop moving when the left mouse key is pressed this way and will be positioned based on the location of the index finger as it is in default mouse motion mode. This method can be used for single clicks, but is more useful for dragging and dropping items since the mmouse key is not released immediately after it is pressed.
+```mermaid
+flowchart LR
+    subgraph Client["Browser client"]
+        CAM[Webcam]
+        MP[MediaPipe]
+        GE[Gesture engine]
+        CAM --> MP --> GE
+    end
 
-<img src="images/hold_down_left_click-demo.gif" width="600" height="350" />
+    subgraph Cloud["Cloud relay"]
+        SRV[server.py]
+    end
 
-----------------------------------------------------------------
+    subgraph PC["Target PC"]
+        AGT[local_agent.py]
+        OS[Windows desktop]
+        AGT --> OS
+    end
 
-**Speech to Text**
+    GE -->|relay_command| SRV
+    SRV -->|agent_command| AGT
+```
 
-To trigger speech to text recognition lift your pinky and thumb. This hand position does not need to be held up the entire time you are talking, the voice recording will end when you stop talking and then you may make the gesture to trigger it again. Supported special characters are `'exclamation mark'` &rarr; `!`,  `'question mark'` &rarr; `?`, `'period'` &rarr; `.`, `'comma'` &rarr; `,`, `'space'`, &rarr; `' '`, and numeric characters.
+---
 
-<img src="images/speech_to_text-demo.gif" width="600" height="350" />
+## How It Works
 
-----------------------------------------------------------------
+1. Open the **web frontend** and enter the **server URL** and **room ID**.
+2. Click **Connect** — the browser joins the room as `frontend` with **client-side tracking** enabled.
+3. On the PC you want to control, run **`local_agent.py`** with the same server URL and room ID (joins as `agent`).
+4. Click **Start Camera Stream** — MediaPipe runs in the browser at ~30 FPS.
+5. Each frame: landmarks → `processGestures()` → `relay_command` → server → `agent_command` → PyAutoGUI / Win32 cursor.
+6. After ~4 seconds without hand commands, the agent **releases** the cursor so your normal mouse works again.
 
-***More cool new features coming soon!***
+---
 
-----------------------------------------------------------------
+## Project Structure
 
-## Installation
+```
+Desktop_AI_Controller/
+├── frontend/                 # React + Vite web app
+│   └── src/
+│       ├── App.tsx           # Main UI, Socket.IO, camera loop
+│       ├── handTracker.ts    # MediaPipe WASM loader + canvas draw
+│       ├── gestureEngine.ts  # Finger rules, modes, screen mapping
+│       ├── smoothPointer.ts  # Cursor stabilization
+│       ├── backgroundSession.ts
+│       ├── CompanionApp.tsx  # Mini pop-out window
+│       └── companionWindow.ts
+├── server.py                 # Flask-SocketIO cloud relay
+├── local_agent.py            # Desktop executor (run on target PC)
+├── HandTrackingModule.py     # MediaPipe helpers (server fallback + legacy)
+├── mainGUI.py                # Legacy PyQt5 all-in-one app
+├── bridge.py                 # Optional API to start/stop mainGUI
+├── utils.py                  # Jarvis, speech-to-text, sounds (legacy)
+├── config.py                 # Screen regions, volume (legacy)
+├── requirements.txt          # Server / Docker dependencies
+├── agent_requirements.txt    # Local agent dependencies
+├── Dockerfile                # Render deployment
+├── SERVER_SETUP.md           # Short deploy checklist
+└── README.md                 # This file
+```
 
-> `git clone https://github.com/Iliaromanov/Resume-Chat-Bot.git`
+---
 
-> `cd AI-Based-Desktop-Controller`
+## Requirements
 
-> `pip install -r requirements.txt`
+### Cloud path
 
-> `python mainGUI.py`
+| Component | Requirement |
+|-----------|-------------|
+| **Target PC** | Windows 10/11, Python 3.10+ |
+| **Browser** | Chrome or Edge (Chromium)—for MediaPipe WASM and Web Speech API |
+| **Webcam** | Any standard webcam (720p recommended) |
+| **Network** | Internet access to cloud server (Render or self-hosted) |
+| **Optional GPU** | Speeds up browser MediaPipe (falls back to CPU) |
+
+### Legacy path
+
+| Component | Requirement |
+|-----------|-------------|
+| **OS** | Windows |
+| **Python** | 3.8+ with PyQt5, OpenCV, MediaPipe, PyAudio (see `requirements.txt` + GUI deps) |
+| **Hardware** | Webcam + microphone |
+
+---
